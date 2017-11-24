@@ -16,6 +16,11 @@
 #include "esp_adc_cal.h"
 #include "ds18b20.h"
 
+#include <stdlib.h>
+#include <string.h>
+#include "esp_vfs.h"
+#include "esp_vfs_fat.h"
+
 #define V_REF 1100
 #define TEMP_GPIO 14
 #define ADC1_SOIL_CHANNEL (ADC1_CHANNEL_6) //GPIO 34, A2 Feather
