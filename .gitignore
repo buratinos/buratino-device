@@ -37,3 +37,4 @@ build*
 
 # temps
 *.old
+*.blend1
