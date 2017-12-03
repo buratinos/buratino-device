@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/event_groups.h"
 #include "driver/gpio.h"
 #include "driver/adc.h"
 #include "esp_system.h"
@@ -26,7 +27,7 @@
 
 #include <time.h>
 #include <sys/time.h>
-#include "freertos/event_groups.h"
+
 #include "esp_wifi.h"
 #include "esp_event_loop.h"
 #include "esp_attr.h"
@@ -34,6 +35,11 @@
 #include "nvs_flash.h"
 
 #include "lwip/err.h"
+#include "lwip/sockets.h"
+#include "lwip/sys.h"
+#include "lwip/netdb.h"
+#include "lwip/dns.h"
+
 #include "apps/sntp/sntp.h"
 
 
@@ -47,19 +53,24 @@
 /* The examples use simple WiFi configuration that you can set via
    'make menuconfig'.
    If you'd rather not, just change the below entries to strings with
-   the config you want - ie #define EXAMPLE_WIFI_SSID "mywifissid"
+   the config you want - ie #define WIFI_SSID "mywifissid"
 */
-#define EXAMPLE_WIFI_SSID "Tech_D0048070"
-#define EXAMPLE_WIFI_PASS "UREZYUND"
+#define WIFI_SSID "Tech_D0048070"
+#define WIFI_PASS "UREZYUND"
+
+/* Constants that aren't configurable in menuconfig */
+#define WEB_SERVER "example.com"
+#define WEB_PORT 80
+#define WEB_URL "http://example.com/"
 
 /* Sheduling configuration
    TODO: make configurable by the user
 */ 
-#define DEEP_SLEEP_DELAY 10000  // delay between reboots, in ms
+#define DEEP_SLEEP_DELAY 10     // delay between reboots, in ms
 #define FREQ_TEMPERATURE 1      // read out temperatute every X reboots
 #define FREQ_LIGHT 1            // read out light every X reboots
 #define FREQ_SOIL 2             // read out soil every X reboots
-#define FREQ_SYNC 3             // sync data to the server every X reboots
+#define FREQ_SYNC 2             // sync data to the server every X reboots
 
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
 static EventGroupHandle_t wifi_event_group;
@@ -79,10 +90,15 @@ static const char *TAG = "main";
  RTC_DATA_ATTR static int boot_count = 0;
  RTC_DATA_ATTR static struct timeval sleep_enter_time;
  
- static void obtain_time(void);
+ static void http_get_task(void);
  static void initialize_sntp(void);
  static void initialise_wifi(void);
  static esp_err_t event_handler(void *ctx, system_event_t *event);
+
+ static const char *REQUEST = "GET " WEB_URL " HTTP/1.0\r\n"
+    "Host: "WEB_SERVER"\r\n"
+    "User-Agent: esp-idf/1.0 esp32\r\n"
+    "\r\n";
 
 
 void app_main()
@@ -224,40 +240,58 @@ void app_main()
         ESP_LOGI(TAG, "Read out data stored");
     }
     
-    /*
-
-    // SETTING UP TIME
-    time_t now;
-    struct tm timeinfo;
-    time(&now);
-    localtime_r(&now, &timeinfo);
-    // Is time set? If not, tm_year will be (1970 - 1900).
-    if (timeinfo.tm_year < (2016 - 1900)) {
-        ESP_LOGI(TAG, "Time is not set yet. Connecting to WiFi and getting time over NTP.");
-        obtain_time();
-        // update 'now' variable with current time
+    ESP_ERROR_CHECK( nvs_flash_init() );
+    // sync data to the cloud
+    if (boot_count % FREQ_SYNC == 0) {
+        time_t now;
+        struct tm timeinfo;
         time(&now);
+        localtime_r(&now, &timeinfo);
+
+        initialise_wifi();
+        xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
+
+
+        // Is time set? If not, tm_year will be (1970 - 1900).
+        if (timeinfo.tm_year < (2016 - 1900)) {
+            ESP_LOGI(TAG, "Time is not set yet. Getting time over NTP.");
+            
+            initialize_sntp();
+            
+            // wait for time to be set
+            time_t now = 0;
+            struct tm timeinfo = { 0 };
+            int retry = 0;
+            const int retry_count = 10;
+            while(timeinfo.tm_year < (2016 - 1900) && ++retry < retry_count) {
+                ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
+                vTaskDelay(2000 / portTICK_PERIOD_MS);
+                time(&now);
+                localtime_r(&now, &timeinfo);
+            }
+
+            // update 'now' variable with current time
+            time(&now);
+        }
+        char strftime_buf[64];
+
+        // Set timezone to Eastern Standard Time and print local time
+        setenv("TZ", "EST5EDT,M3.2.0/2,M11.1.0", 1);
+        tzset();
+        localtime_r(&now, &timeinfo);
+        strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+        ESP_LOGI(TAG, "The current date/time in New York is: %s", strftime_buf);
+
+        // SYNC data
+        //xTaskCreate(&http_get_task, "http_get_task", 4096, NULL, 5, NULL);
+        http_get_task();
+    
+        ESP_ERROR_CHECK( esp_wifi_stop() );
     }
-    char strftime_buf[64];
-
-    // Set timezone to Eastern Standard Time and print local time
-    setenv("TZ", "EST5EDT,M3.2.0/2,M11.1.0", 1);
-    tzset();
-    localtime_r(&now, &timeinfo);
-    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
-    ESP_LOGI(TAG, "The current date/time in New York is: %s", strftime_buf);
-
-    // Set timezone to China Standard Time
-    setenv("TZ", "CST-8", 1);
-    tzset();
-    localtime_r(&now, &timeinfo);
-    strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
-    ESP_LOGI(TAG, "The current date/time in Shanghai is: %s", strftime_buf);
-
-    */
 
 
-    // Open renamed file for reading
+    // Open light file for reading
+    /*
     ESP_LOGI(TAG, "Reading file");
     FILE* f = fopen("/spiffs/light.txt", "r");
     if (f == NULL) {
@@ -269,55 +303,16 @@ void app_main()
         printf("%s", line);
     }
     fclose(f);
+    */
+
 
     // All done, unmount partition and disable SPIFFS
     esp_vfs_spiffs_unregister(NULL);
     ESP_LOGI(TAG, "SPIFFS unmounted");
 
-    const int deep_sleep_sec = 500;
-    ESP_LOGI(TAG, "Entering deep sleep for %d seconds", deep_sleep_sec);
-    esp_deep_sleep(1000000LL * deep_sleep_sec);
-}
-
-
-void display_chip_info() {
-    /* Print chip information */
-    esp_chip_info_t chip_info;
-    esp_chip_info(&chip_info);
-
-    printf("This is ESP32 chip with %d CPU cores, WiFi%s%s, ",
-            chip_info.cores,
-            (chip_info.features & CHIP_FEATURE_BT) ? "/BT" : "",
-            (chip_info.features & CHIP_FEATURE_BLE) ? "/BLE" : "");
-
-    printf("silicon revision %d\n", chip_info.revision);
-
-    printf("%dMB %s flash\n", spi_flash_get_chip_size() / (1024 * 1024),
-            (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
-}
-
-
-static void obtain_time(void)
-{
-    ESP_ERROR_CHECK( nvs_flash_init() );
-    initialise_wifi();
-    xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT,
-                        false, true, portMAX_DELAY);
-    initialize_sntp();
-
-    // wait for time to be set
-    time_t now = 0;
-    struct tm timeinfo = { 0 };
-    int retry = 0;
-    const int retry_count = 10;
-    while(timeinfo.tm_year < (2016 - 1900) && ++retry < retry_count) {
-        ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
-        vTaskDelay(2000 / portTICK_PERIOD_MS);
-        time(&now);
-        localtime_r(&now, &timeinfo);
-    }
-
-    ESP_ERROR_CHECK( esp_wifi_stop() );
+    //const int deep_sleep_sec = 10;
+    ESP_LOGI(TAG, "Entering deep sleep for %d seconds", DEEP_SLEEP_DELAY);
+    esp_deep_sleep(1000000LL * DEEP_SLEEP_DELAY);
 }
 
 static void initialize_sntp(void)
@@ -338,8 +333,8 @@ static void initialise_wifi(void)
     ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
     wifi_config_t wifi_config = {
         .sta = {
-            .ssid = EXAMPLE_WIFI_SSID,
-            .password = EXAMPLE_WIFI_PASS,
+            .ssid = WIFI_SSID,
+            .password = WIFI_PASS,
         },
     };
     ESP_LOGI(TAG, "Setting WiFi configuration SSID %s...", wifi_config.sta.ssid);
@@ -367,4 +362,93 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
         break;
     }
     return ESP_OK;
+}
+
+
+static void http_get_task(void)
+{
+    const struct addrinfo hints = {
+        .ai_family = AF_INET,
+        .ai_socktype = SOCK_STREAM,
+    };
+    struct addrinfo *res;
+    struct in_addr *addr;
+    int s, r;
+    char recv_buf[64];
+
+    /* Wait for the callback to set the CONNECTED_BIT in the
+        event group.
+    */
+    //xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT,
+    //                    false, true, portMAX_DELAY);
+    //ESP_LOGI(TAG, "Connected to AP");
+
+    int err = getaddrinfo(WEB_SERVER, "80", &hints, &res);
+
+    if(err != 0 || res == NULL) {
+        ESP_LOGE(TAG, "DNS lookup failed err=%d res=%p", err, res);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        continue;
+    }
+
+    /* Code to print the resolved IP.
+        Note: inet_ntoa is non-reentrant, look at ipaddr_ntoa_r for "real" code */
+    addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
+    ESP_LOGI(TAG, "DNS lookup succeeded. IP=%s", inet_ntoa(*addr));
+
+    s = socket(res->ai_family, res->ai_socktype, 0);
+    if(s < 0) {
+        ESP_LOGE(TAG, "... Failed to allocate socket.");
+        freeaddrinfo(res);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        continue;
+    }
+    ESP_LOGI(TAG, "... allocated socket");
+
+    if(connect(s, res->ai_addr, res->ai_addrlen) != 0) {
+        ESP_LOGE(TAG, "... socket connect failed errno=%d", errno);
+        close(s);
+        freeaddrinfo(res);
+        vTaskDelay(4000 / portTICK_PERIOD_MS);
+        continue;
+    }
+
+    ESP_LOGI(TAG, "... connected");
+    freeaddrinfo(res);
+
+    if (write(s, REQUEST, strlen(REQUEST)) < 0) {
+        ESP_LOGE(TAG, "... socket send failed");
+        close(s);
+        vTaskDelay(4000 / portTICK_PERIOD_MS);
+        continue;
+    }
+    ESP_LOGI(TAG, "... socket send success");
+
+    struct timeval receiving_timeout;
+    receiving_timeout.tv_sec = 5;
+    receiving_timeout.tv_usec = 0;
+    if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &receiving_timeout,
+            sizeof(receiving_timeout)) < 0) {
+        ESP_LOGE(TAG, "... failed to set socket receiving timeout");
+        close(s);
+        vTaskDelay(4000 / portTICK_PERIOD_MS);
+        continue;
+    }
+    ESP_LOGI(TAG, "... set socket receiving timeout success");
+
+    /* Read HTTP response */
+    do {
+        bzero(recv_buf, sizeof(recv_buf));
+        r = read(s, recv_buf, sizeof(recv_buf)-1);
+        for(int i = 0; i < r; i++) {
+            putchar(recv_buf[i]);
+        }
+    } while(r > 0);
+
+    ESP_LOGI(TAG, "... done reading from socket. Last read return=%d errno=%d\r\n", r, errno);
+    close(s);
+    for(int countdown = 10; countdown >= 0; countdown--) {
+        ESP_LOGI(TAG, "%d... ", countdown);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
 }
