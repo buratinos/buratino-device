@@ -59,9 +59,9 @@
 #define WIFI_PASS "UREZYUND"
 
 /* Constants that aren't configurable in menuconfig */
-#define WEB_SERVER "example.com"
+#define WEB_SERVER "buratino.asobolev.ru"
 #define WEB_PORT 80
-#define WEB_URL "http://example.com/"
+#define WEB_URL "http://buratino.asobolev.ru/api/v1/devices/"
 
 /* Sheduling configuration
    TODO: make configurable by the user
@@ -107,6 +107,7 @@ void app_main()
     ESP_LOGI(TAG, "Boot count: %d", boot_count);  // boot counts between deep sleep sessions
 
     struct timeval now;
+    struct tm timeinfo;
     gettimeofday(&now, NULL);
     unsigned long currentMillis = xTaskGetTickCount();
     int sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000 + (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
@@ -186,7 +187,7 @@ void app_main()
 
         float temp = ds18b20_get_temp();
         printf("Temperature at %d: %0.1f\n", sleep_time_ms, temp);
-        fprintf(f, "%d, %0.2f\n", sleep_time_ms, temp);
+        fprintf(f, "%d %0.2f\n", sleep_time_ms, temp);
         fclose(f);
 
         ESP_LOGI(TAG, "Read out data stored");
@@ -210,7 +211,7 @@ void app_main()
         
         printf("Light: %d\n", light);
 
-        fprintf(f, "%d, %d\n", sleep_time_ms, light);
+        fprintf(f, "%d %d\n", sleep_time_ms, light);
         fclose(f);
 
         ESP_LOGI(TAG, "Read out data stored");
@@ -229,28 +230,28 @@ void app_main()
             return;
         }
 
-        currentMillis = xTaskGetTickCount();
         int soil = adc1_to_voltage(ADC1_SOIL_CHANNEL, &characteristics_lgt);
         
         printf("Soil: %d\n", soil);
 
-        fprintf(f, "%d, %d\n", sleep_time_ms, soil);
+        fprintf(f, "%d %d\n", sleep_time_ms, soil);
         fclose(f);
 
         ESP_LOGI(TAG, "Read out data stored");
     }
     
     ESP_ERROR_CHECK( nvs_flash_init() );
+
+
     // sync data to the cloud
     if (boot_count % FREQ_SYNC == 0) {
         time_t now;
-        struct tm timeinfo;
         time(&now);
         localtime_r(&now, &timeinfo);
 
         initialise_wifi();
+        /* Waiting for connection */
         xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
-
 
         // Is time set? If not, tm_year will be (1970 - 1900).
         if (timeinfo.tm_year < (2016 - 1900)) {
@@ -284,16 +285,15 @@ void app_main()
 
         // SYNC data
         //xTaskCreate(&http_get_task, "http_get_task", 4096, NULL, 5, NULL);
-        http_get_task();
+        //http_get_task();
     
         ESP_ERROR_CHECK( esp_wifi_stop() );
     }
 
-
     // Open light file for reading
     /*
     ESP_LOGI(TAG, "Reading file");
-    FILE* f = fopen("/spiffs/light.txt", "r");
+    FILE* f = fopen("/spiffs/temperature.txt", "r");
     if (f == NULL) {
         ESP_LOGE(TAG, "Failed to open file for reading");
         return;
@@ -304,6 +304,42 @@ void app_main()
     }
     fclose(f);
     */
+
+
+
+
+
+    struct tm readout_time_s;
+    char* curr_time_buf[64];
+
+
+
+    FILE* f = fopen("/spiffs/light.txt", "r");
+    if (f == NULL) {
+        ESP_LOGE(TAG, "Failed to open light file for reading");
+        return;
+    }
+    char line[64];
+    while (fgets(line, 64, f)) {
+        char readout[1024];
+
+        //char t_from_reboot = strtok (line, " ");
+        //char readout_value = strtok (line, " ");
+
+        char *readout_value = strrchr(line, ' ');
+
+        time_t readout_time = mktime(&timeinfo);
+        //readout_time -= (long int)t_from_reboot;
+        readout_time -= (long int)1000;
+    
+        strftime(curr_time_buf, sizeof(curr_time_buf), "%c", localtime(readout_time));
+        snprintf(readout, 1024, "{\"timestamp\": %s, \"sensor_type\": %s, \"value\": %s}", "foo", "LUM", readout_value+1);
+
+        ESP_LOGI(TAG, "JSON: %s", readout);
+    }
+    fclose(f);
+
+
 
 
     // All done, unmount partition and disable SPIFFS
@@ -365,6 +401,28 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
 }
 
 
+static void read_file_as_json()
+{
+    time_t now;
+    struct tm timeinfo;
+    time(&now);
+    localtime_r(&now, &timeinfo);
+
+    // Open light file for reading
+    ESP_LOGI(TAG, "Reading file");
+    FILE* f = fopen("/spiffs/light.txt", "r");
+    if (f == NULL) {
+        ESP_LOGE(TAG, "Failed to open file for reading");
+        return;
+    }
+    char line[256];
+    while (fgets(line, 256, f)) {
+        printf("%s", line);
+    }
+    fclose(f);
+
+}
+
 static void http_get_task(void)
 {
     const struct addrinfo hints = {
@@ -383,72 +441,123 @@ static void http_get_task(void)
     //                    false, true, portMAX_DELAY);
     //ESP_LOGI(TAG, "Connected to AP");
 
-    int err = getaddrinfo(WEB_SERVER, "80", &hints, &res);
+    while(1) {
+        int err = getaddrinfo(WEB_SERVER, "80", &hints, &res);
 
-    if(err != 0 || res == NULL) {
-        ESP_LOGE(TAG, "DNS lookup failed err=%d res=%p", err, res);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-        continue;
-    }
-
-    /* Code to print the resolved IP.
-        Note: inet_ntoa is non-reentrant, look at ipaddr_ntoa_r for "real" code */
-    addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
-    ESP_LOGI(TAG, "DNS lookup succeeded. IP=%s", inet_ntoa(*addr));
-
-    s = socket(res->ai_family, res->ai_socktype, 0);
-    if(s < 0) {
-        ESP_LOGE(TAG, "... Failed to allocate socket.");
-        freeaddrinfo(res);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-        continue;
-    }
-    ESP_LOGI(TAG, "... allocated socket");
-
-    if(connect(s, res->ai_addr, res->ai_addrlen) != 0) {
-        ESP_LOGE(TAG, "... socket connect failed errno=%d", errno);
-        close(s);
-        freeaddrinfo(res);
-        vTaskDelay(4000 / portTICK_PERIOD_MS);
-        continue;
-    }
-
-    ESP_LOGI(TAG, "... connected");
-    freeaddrinfo(res);
-
-    if (write(s, REQUEST, strlen(REQUEST)) < 0) {
-        ESP_LOGE(TAG, "... socket send failed");
-        close(s);
-        vTaskDelay(4000 / portTICK_PERIOD_MS);
-        continue;
-    }
-    ESP_LOGI(TAG, "... socket send success");
-
-    struct timeval receiving_timeout;
-    receiving_timeout.tv_sec = 5;
-    receiving_timeout.tv_usec = 0;
-    if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &receiving_timeout,
-            sizeof(receiving_timeout)) < 0) {
-        ESP_LOGE(TAG, "... failed to set socket receiving timeout");
-        close(s);
-        vTaskDelay(4000 / portTICK_PERIOD_MS);
-        continue;
-    }
-    ESP_LOGI(TAG, "... set socket receiving timeout success");
-
-    /* Read HTTP response */
-    do {
-        bzero(recv_buf, sizeof(recv_buf));
-        r = read(s, recv_buf, sizeof(recv_buf)-1);
-        for(int i = 0; i < r; i++) {
-            putchar(recv_buf[i]);
+        if(err != 0 || res == NULL) {
+            ESP_LOGE(TAG, "DNS lookup failed err=%d res=%p", err, res);
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            continue;
         }
-    } while(r > 0);
 
-    ESP_LOGI(TAG, "... done reading from socket. Last read return=%d errno=%d\r\n", r, errno);
-    close(s);
-    for(int countdown = 10; countdown >= 0; countdown--) {
-        ESP_LOGI(TAG, "%d... ", countdown);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        /* Code to print the resolved IP.
+            Note: inet_ntoa is non-reentrant, look at ipaddr_ntoa_r for "real" code */
+        addr = &((struct sockaddr_in *)res->ai_addr)->sin_addr;
+        ESP_LOGI(TAG, "DNS lookup succeeded. IP=%s", inet_ntoa(*addr));
+
+        s = socket(res->ai_family, res->ai_socktype, 0);
+        if(s < 0) {
+            ESP_LOGE(TAG, "... Failed to allocate socket.");
+            freeaddrinfo(res);
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            continue;
+        }
+        ESP_LOGI(TAG, "... allocated socket");
+
+        if(connect(s, res->ai_addr, res->ai_addrlen) != 0) {
+            ESP_LOGE(TAG, "... socket connect failed errno=%d", errno);
+            close(s);
+            freeaddrinfo(res);
+            vTaskDelay(4000 / portTICK_PERIOD_MS);
+            continue;
+        }
+
+        ESP_LOGI(TAG, "... connected");
+        freeaddrinfo(res);
+
+        // from https://www.esp32.com/viewtopic.php?t=2014
+        // https://stackoverflow.com/questions/14002954/c-programming-how-to-read-the-whole-file-contents-into-a-buffer
+        // http://www.tutorialspoint.com/c_standard_library/c_function_strcat.htm
+        // https://gsamaras.wordpress.com/code/read-file-line-by-line-in-c-and-c/
+        char *req_part1 = "POST" WEB_URL " HTTP/1.0\r\n"
+            "User-Agent: esp-idf/1.0 esp32\r\n"
+            "Connection: close\r\n"
+            "Host: " WEB_SERVER "\r\n"
+            "Content-Type: application/json\r\n"
+            "\r\n";
+
+        //REQ += "{\"pwr\":\"off\"}";
+
+
+
+
+
+
+
+        char *source = NULL;
+        FILE* fp = fopen("/spiffs/temperature.txt", "r");
+
+        if (fp != NULL) {
+            /* Go to the end of the file. */
+            if (fseek(fp, 0L, SEEK_END) == 0) {
+                /* Get the size of the file. */
+                long bufsize = ftell(fp);
+                if (bufsize == -1) { /* Error */ }
+        
+                /* Allocate our buffer to that size. */
+                source = malloc(sizeof(char) * (bufsize + 1));
+        
+                /* Go back to the start of the file. */
+                if (fseek(fp, 0L, SEEK_SET) != 0) { /* Handle error here */ }
+        
+                /* Read the entire file into memory. */
+                size_t newLen = fread(source, sizeof(char), bufsize, fp);
+                if (newLen == 0) {
+                    fputs("Error reading file", stderr);
+                } else {
+                    source[++newLen] = '\0'; /* Just to be safe. */
+                }
+            }
+            fclose(fp);
+        }
+
+
+
+
+
+
+        if (write(s, REQUEST, strlen(REQUEST)) < 0) {
+            ESP_LOGE(TAG, "... socket send failed");
+            close(s);
+            vTaskDelay(4000 / portTICK_PERIOD_MS);
+            continue;
+        }
+        ESP_LOGI(TAG, "... socket send success");
+
+        struct timeval receiving_timeout;
+        receiving_timeout.tv_sec = 5;
+        receiving_timeout.tv_usec = 0;
+        if (setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &receiving_timeout,
+                sizeof(receiving_timeout)) < 0) {
+            ESP_LOGE(TAG, "... failed to set socket receiving timeout");
+            close(s);
+            vTaskDelay(4000 / portTICK_PERIOD_MS);
+            continue;
+        }
+        ESP_LOGI(TAG, "... set socket receiving timeout success");
+
+        /* Read HTTP response */
+        do {
+            bzero(recv_buf, sizeof(recv_buf));
+            r = read(s, recv_buf, sizeof(recv_buf)-1);
+            for(int i = 0; i < r; i++) {
+                putchar(recv_buf[i]);
+            }
+        } while(r > 0);
+
+        ESP_LOGI(TAG, "... done reading from socket. Last read return=%d errno=%d\r\n", r, errno);
+        close(s);
+
+        continue;
     }
 }
