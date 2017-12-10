@@ -41,6 +41,7 @@
 #include "lwip/dns.h"
 
 #include "apps/sntp/sntp.h"
+#include "utils.h"
 
 
 
@@ -61,7 +62,7 @@
 /* Constants that aren't configurable in menuconfig */
 #define WEB_SERVER "buratino.asobolev.ru"
 #define WEB_PORT 80
-#define WEB_URL "http://buratino.asobolev.ru/api/v1/devices/"
+#define WEB_URL "http://buratino.asobolev.ru/api/v1/devices/2e52e67d-d0f5-4f87-b7b6-9aae97a42623/readouts"
 
 /* Sheduling configuration
    TODO: make configurable by the user
@@ -70,7 +71,7 @@
 #define FREQ_TEMPERATURE 1      // read out temperatute every X reboots
 #define FREQ_LIGHT 1            // read out light every X reboots
 #define FREQ_SOIL 2             // read out soil every X reboots
-#define FREQ_SYNC 2             // sync data to the server every X reboots
+#define FREQ_SYNC 1             // sync data to the server every X reboots
 
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
 static EventGroupHandle_t wifi_event_group;
@@ -90,15 +91,10 @@ static const char *TAG = "main";
  RTC_DATA_ATTR static int boot_count = 0;
  RTC_DATA_ATTR static struct timeval sleep_enter_time;
  
- static void http_get_task(void);
+ static void http_get_task(char* REQUEST);
  static void initialize_sntp(void);
  static void initialise_wifi(void);
  static esp_err_t event_handler(void *ctx, system_event_t *event);
-
- static const char *REQUEST = "GET " WEB_URL " HTTP/1.0\r\n"
-    "Host: "WEB_SERVER"\r\n"
-    "User-Agent: esp-idf/1.0 esp32\r\n"
-    "\r\n";
 
 
 void app_main()
@@ -110,8 +106,9 @@ void app_main()
     struct tm timeinfo;
     gettimeofday(&now, NULL);
     unsigned long currentMillis = xTaskGetTickCount();
-    int sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000 + (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
-    ESP_LOGI(TAG, "Time spent in deep sleep: %dms\n", sleep_time_ms);
+    unsigned long sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000 + (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
+    ESP_LOGI(TAG, "Sleep enter time: %f\n", (double)sleep_enter_time.tv_sec);
+    ESP_LOGI(TAG, "Time spent in deep sleep: %lu ms\n", sleep_time_ms);
 
     ESP_LOGI(TAG, "Setting up analog channels");
     adc1_config_width(ADC_WIDTH_BIT_12);
@@ -186,14 +183,14 @@ void app_main()
         }
 
         float temp = ds18b20_get_temp();
-        printf("Temperature at %d: %0.1f\n", sleep_time_ms, temp);
-        fprintf(f, "%d %0.2f\n", sleep_time_ms, temp);
+        printf("Temperature at %lu: %0.1f\n", sleep_time_ms, temp);
+        fprintf(f, "%lu %0.2f\n", sleep_time_ms, temp);
         fclose(f);
 
         ESP_LOGI(TAG, "Read out data stored");
     }
 
-
+    /*
     // perform sensor readouts
     if (boot_count % FREQ_LIGHT == 0) {
         esp_adc_cal_characteristics_t characteristics_tmp;
@@ -239,15 +236,16 @@ void app_main()
 
         ESP_LOGI(TAG, "Read out data stored");
     }
+    */
     
     ESP_ERROR_CHECK( nvs_flash_init() );
 
 
     // sync data to the cloud
     if (boot_count % FREQ_SYNC == 0) {
-        time_t now;
-        time(&now);
-        localtime_r(&now, &timeinfo);
+        time_t time_now;
+        time(&time_now);
+        localtime_r(&time_now, &timeinfo);
 
         initialise_wifi();
         /* Waiting for connection */
@@ -260,32 +258,100 @@ void app_main()
             initialize_sntp();
             
             // wait for time to be set
-            time_t now = 0;
+            time_t time_now = 0;
             struct tm timeinfo = { 0 };
             int retry = 0;
             const int retry_count = 10;
             while(timeinfo.tm_year < (2016 - 1900) && ++retry < retry_count) {
                 ESP_LOGI(TAG, "Waiting for system time to be set... (%d/%d)", retry, retry_count);
                 vTaskDelay(2000 / portTICK_PERIOD_MS);
-                time(&now);
-                localtime_r(&now, &timeinfo);
+                time(&time_now);
+                localtime_r(&time_now, &timeinfo);
             }
 
-            // update 'now' variable with current time
-            time(&now);
+            // update 'time_now' variable with current time
+            time(&time_now);
         }
         char strftime_buf[64];
 
         // Set timezone to Eastern Standard Time and print local time
         setenv("TZ", "EST5EDT,M3.2.0/2,M11.1.0", 1);
         tzset();
-        localtime_r(&now, &timeinfo);
+        localtime_r(&time_now, &timeinfo);
+
+        // update sleep enter time
+        struct timeval act_time;
+        gettimeofday(&act_time, NULL);
+        sleep_enter_time.tv_sec = act_time.tv_sec - sleep_time_ms / 1000;
+
         strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
         ESP_LOGI(TAG, "The current date/time in New York is: %s", strftime_buf);
 
+
+
+        // building request body
+        int line_count = count_line_number(&"/spiffs/temperature.txt");
+        char* req_body = malloc(line_count * 128);
+        strcpy(req_body,  "[");
+        
+        char line[64];
+        char curr_time_buf[64];
+        struct tm readout_time_s;
+
+        FILE* f = fopen("/spiffs/temperature.txt", "r");
+        if (f == NULL) {
+            ESP_LOGE(TAG, "Failed to open temperature file for reading");
+            return;  // TODO skip sync this file
+        }
+        
+        int line_idx = 0;
+        while (fgets(line, 64, f)) {
+            char readout[128];
+
+            char* t_from_reboot = strtok (line, " ");  // in ms
+            char* readout_value = strtok (NULL, " ");
+            readout_value[strlen(readout_value) - 1] = 0;  // remove \n
+
+            time_t readout_time = sleep_enter_time.tv_sec + atoi(t_from_reboot) / 1000;
+            localtime_r(&readout_time, &timeinfo);
+            strftime(curr_time_buf, sizeof(curr_time_buf), "%Y-%m-%d %H-%M-%S", &timeinfo);
+
+            if (line_idx != 0) {
+                strcat(req_body, ", ");
+            }
+
+            snprintf(readout, 128, 
+                "{\"timestamp\": \"%s\", \"sensor_type\": \"%s\", \"value\": %s}", 
+                curr_time_buf, "TMP", readout_value
+            );
+
+            strcat(req_body, readout);\
+            line_idx++;
+        }
+        fclose(f);
+
+        strcat(req_body,  "]");
+
+        // building request header
+        char req_header[1024];
+        snprintf(req_header, 1024, "POST " WEB_URL " HTTP/1.0\r\n"
+            "Host: "WEB_SERVER"\r\n"
+            "User-Agent: esp-idf/1.0 esp32\r\n"
+            "Accept: application/json\r\n"
+            "Connection: close\r\n"
+            "Content-Type: application/json\r\n"
+            "Content-Length: %d\r\n"
+            "\r\n", strlen(req_body));
+
+        
+        char* request = malloc(strlen(req_header) + strlen(req_body)); 
+        strcpy(request,  &req_header);
+        strcat(request,  req_body);
+
+        ESP_LOGI(TAG, "FULL REQUEST: \n%s", request);
         // SYNC data
         //xTaskCreate(&http_get_task, "http_get_task", 4096, NULL, 5, NULL);
-        //http_get_task();
+        http_get_task(request);
     
         ESP_ERROR_CHECK( esp_wifi_stop() );
     }
@@ -307,37 +373,6 @@ void app_main()
 
 
 
-
-
-    struct tm readout_time_s;
-    char* curr_time_buf[64];
-
-
-
-    FILE* f = fopen("/spiffs/light.txt", "r");
-    if (f == NULL) {
-        ESP_LOGE(TAG, "Failed to open light file for reading");
-        return;
-    }
-    char line[64];
-    while (fgets(line, 64, f)) {
-        char readout[1024];
-
-        //char t_from_reboot = strtok (line, " ");
-        //char readout_value = strtok (line, " ");
-
-        char *readout_value = strrchr(line, ' ');
-
-        time_t readout_time = mktime(&timeinfo);
-        //readout_time -= (long int)t_from_reboot;
-        readout_time -= (long int)1000;
-    
-        strftime(curr_time_buf, sizeof(curr_time_buf), "%c", localtime(readout_time));
-        snprintf(readout, 1024, "{\"timestamp\": %s, \"sensor_type\": %s, \"value\": %s}", "foo", "LUM", readout_value+1);
-
-        ESP_LOGI(TAG, "JSON: %s", readout);
-    }
-    fclose(f);
 
 
 
@@ -401,29 +436,8 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
 }
 
 
-static void read_file_as_json()
-{
-    time_t now;
-    struct tm timeinfo;
-    time(&now);
-    localtime_r(&now, &timeinfo);
 
-    // Open light file for reading
-    ESP_LOGI(TAG, "Reading file");
-    FILE* f = fopen("/spiffs/light.txt", "r");
-    if (f == NULL) {
-        ESP_LOGE(TAG, "Failed to open file for reading");
-        return;
-    }
-    char line[256];
-    while (fgets(line, 256, f)) {
-        printf("%s", line);
-    }
-    fclose(f);
-
-}
-
-static void http_get_task(void)
+static void http_get_task(char* REQUEST)
 {
     const struct addrinfo hints = {
         .ai_family = AF_INET,
@@ -479,52 +493,6 @@ static void http_get_task(void)
         // https://stackoverflow.com/questions/14002954/c-programming-how-to-read-the-whole-file-contents-into-a-buffer
         // http://www.tutorialspoint.com/c_standard_library/c_function_strcat.htm
         // https://gsamaras.wordpress.com/code/read-file-line-by-line-in-c-and-c/
-        char *req_part1 = "POST" WEB_URL " HTTP/1.0\r\n"
-            "User-Agent: esp-idf/1.0 esp32\r\n"
-            "Connection: close\r\n"
-            "Host: " WEB_SERVER "\r\n"
-            "Content-Type: application/json\r\n"
-            "\r\n";
-
-        //REQ += "{\"pwr\":\"off\"}";
-
-
-
-
-
-
-
-        char *source = NULL;
-        FILE* fp = fopen("/spiffs/temperature.txt", "r");
-
-        if (fp != NULL) {
-            /* Go to the end of the file. */
-            if (fseek(fp, 0L, SEEK_END) == 0) {
-                /* Get the size of the file. */
-                long bufsize = ftell(fp);
-                if (bufsize == -1) { /* Error */ }
-        
-                /* Allocate our buffer to that size. */
-                source = malloc(sizeof(char) * (bufsize + 1));
-        
-                /* Go back to the start of the file. */
-                if (fseek(fp, 0L, SEEK_SET) != 0) { /* Handle error here */ }
-        
-                /* Read the entire file into memory. */
-                size_t newLen = fread(source, sizeof(char), bufsize, fp);
-                if (newLen == 0) {
-                    fputs("Error reading file", stderr);
-                } else {
-                    source[++newLen] = '\0'; /* Just to be safe. */
-                }
-            }
-            fclose(fp);
-        }
-
-
-
-
-
 
         if (write(s, REQUEST, strlen(REQUEST)) < 0) {
             ESP_LOGE(TAG, "... socket send failed");
@@ -558,6 +526,6 @@ static void http_get_task(void)
         ESP_LOGI(TAG, "... done reading from socket. Last read return=%d errno=%d\r\n", r, errno);
         close(s);
 
-        continue;
+        break;
     }
 }
