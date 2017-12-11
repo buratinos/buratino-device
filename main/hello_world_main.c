@@ -91,6 +91,7 @@ static const char *TAG = "main";
  RTC_DATA_ATTR static int boot_count = 0;
  RTC_DATA_ATTR static struct timeval sleep_enter_time;
  
+ int read_adc1_value(int ADC1_CHANNEL);
  static void http_get_task(char* REQUEST);
  static void initialize_sntp(void);
  static void initialise_wifi(void);
@@ -190,12 +191,12 @@ void app_main()
         ESP_LOGI(TAG, "Read out data stored");
     }
 
-    /*
+
     // perform sensor readouts
     if (boot_count % FREQ_LIGHT == 0) {
-        esp_adc_cal_characteristics_t characteristics_tmp;
-        adc1_config_channel_atten(ADC1_LIGHT_CHANNEL, ADC_ATTEN_11db);
-        esp_adc_cal_get_characteristics(V_REF, ADC_ATTEN_11db, ADC_WIDTH_BIT_12, &characteristics_tmp);
+        //esp_adc_cal_characteristics_t characteristics_tmp;
+        //adc1_config_channel_atten(ADC1_LIGHT_CHANNEL, ADC_ATTEN_11db);
+        //esp_adc_cal_get_characteristics(V_REF, ADC_ATTEN_11db, ADC_WIDTH_BIT_12, &characteristics_tmp);
 
         ESP_LOGI(TAG, "Saving light value..");
         FILE* f = fopen("/spiffs/light.txt", "a");
@@ -204,11 +205,12 @@ void app_main()
             return;
         }
 
-        int light = adc1_to_voltage(ADC1_LIGHT_CHANNEL, &characteristics_tmp);
+        //int light = adc1_to_voltage(ADC1_LIGHT_CHANNEL, &characteristics_tmp);
+        int light = read_adc1_value(ADC1_LIGHT_CHANNEL);
         
         printf("Light: %d\n", light);
 
-        fprintf(f, "%d %d\n", sleep_time_ms, light);
+        fprintf(f, "%lu %d\n", sleep_time_ms, light);
         fclose(f);
 
         ESP_LOGI(TAG, "Read out data stored");
@@ -231,12 +233,12 @@ void app_main()
         
         printf("Soil: %d\n", soil);
 
-        fprintf(f, "%d %d\n", sleep_time_ms, soil);
+        fprintf(f, "%lu %d\n", sleep_time_ms, soil);
         fclose(f);
 
         ESP_LOGI(TAG, "Read out data stored");
     }
-    */
+
     
     ESP_ERROR_CHECK( nvs_flash_init() );
 
@@ -351,7 +353,7 @@ void app_main()
         ESP_LOGI(TAG, "FULL REQUEST: \n%s", request);
         // SYNC data
         //xTaskCreate(&http_get_task, "http_get_task", 4096, NULL, 5, NULL);
-        http_get_task(request);
+        //http_get_task(request);
     
         ESP_ERROR_CHECK( esp_wifi_stop() );
     }
@@ -384,6 +386,16 @@ void app_main()
     //const int deep_sleep_sec = 10;
     ESP_LOGI(TAG, "Entering deep sleep for %d seconds", DEEP_SLEEP_DELAY);
     esp_deep_sleep(1000000LL * DEEP_SLEEP_DELAY);
+}
+
+
+int read_adc1_value(int ADC1_CHANNEL)  // TODO check if we need it all every time
+{
+    esp_adc_cal_characteristics_t characteristics_gt;
+    adc1_config_channel_atten(ADC1_CHANNEL, ADC_ATTEN_11db);  
+    esp_adc_cal_get_characteristics(V_REF, ADC_ATTEN_11db, ADC_WIDTH_BIT_12, &characteristics_gt);
+
+    return adc1_to_voltage(ADC1_CHANNEL, &characteristics_gt);
 }
 
 static void initialize_sntp(void)
@@ -488,11 +500,6 @@ static void http_get_task(char* REQUEST)
 
         ESP_LOGI(TAG, "... connected");
         freeaddrinfo(res);
-
-        // from https://www.esp32.com/viewtopic.php?t=2014
-        // https://stackoverflow.com/questions/14002954/c-programming-how-to-read-the-whole-file-contents-into-a-buffer
-        // http://www.tutorialspoint.com/c_standard_library/c_function_strcat.htm
-        // https://gsamaras.wordpress.com/code/read-file-line-by-line-in-c-and-c/
 
         if (write(s, REQUEST, strlen(REQUEST)) < 0) {
             ESP_LOGE(TAG, "... socket send failed");
