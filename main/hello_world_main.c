@@ -42,14 +42,9 @@
 
 #include "apps/sntp/sntp.h"
 #include "utils.h"
+#include "sensors.h"
 
 
-
-
-#define V_REF 1100
-#define TEMP_GPIO 14
-#define ADC1_SOIL_CHANNEL (ADC1_CHANNEL_6) //GPIO 34, A2 Feather
-#define ADC1_LIGHT_CHANNEL (ADC1_CHANNEL_0) //GPIO 36, A4 Feather
 
 /* The examples use simple WiFi configuration that you can set via
    'make menuconfig'.
@@ -88,14 +83,14 @@ static const char *TAG = "main";
  * It is placed into RTC memory using RTC_DATA_ATTR and
  * maintains its value when ESP32 wakes from deep sleep.
  */
- RTC_DATA_ATTR static int boot_count = 0;
- RTC_DATA_ATTR static struct timeval sleep_enter_time;
- 
- int read_adc1_value(int ADC1_CHANNEL);
- static void http_get_task(char* REQUEST);
- static void initialize_sntp(void);
- static void initialise_wifi(void);
- static esp_err_t event_handler(void *ctx, system_event_t *event);
+RTC_DATA_ATTR static int boot_count = 0;
+RTC_DATA_ATTR static struct timeval sleep_enter_time;
+
+
+static void http_get_task(char* REQUEST);
+static void initialize_sntp(void);
+static void initialise_wifi(void);
+static esp_err_t event_handler(void *ctx, system_event_t *event);
 
 
 void app_main()
@@ -111,8 +106,8 @@ void app_main()
     ESP_LOGI(TAG, "Sleep enter time: %f\n", (double)sleep_enter_time.tv_sec);
     ESP_LOGI(TAG, "Time spent in deep sleep: %lu ms\n", sleep_time_ms);
 
-    ESP_LOGI(TAG, "Setting up analog channels");
-    adc1_config_width(ADC_WIDTH_BIT_12);
+    //ESP_LOGI(TAG, "Setting up analog channels");
+    //adc1_config_width(ADC_WIDTH_BIT_12);
 
     ESP_LOGI(TAG, "Initializing SPIFFS");
     esp_vfs_spiffs_conf_t conf = {
@@ -169,7 +164,28 @@ void app_main()
             printf("Normal deep sleep reboot\n");
     }
 
+    sensor_settings_t* sensors = malloc(sizeof(sensor_settings_t) * get_sensor_number());;
+    sensor_settings_init(sensors);
 
+
+    //sensor_settings_t sensors = (sensor_settings_t*)sensor_settings_init();
+    //ESP_LOGI(TAG, "SENSOR NUMBER %d\n", sizeof(*sensors) / sizeof(sensor_settings_t));
+
+    sensor_settings_t st = sensors[0];
+    ESP_LOGI(TAG, "%s VALUE READ: %d\n", "TEMP", st.read());  
+
+    /*
+    for (int i = 0; i < 3; i++) {
+        sensor_settings_t st = sensors[i];
+
+        char* sensor_type = st.code;
+        int value = st.read_value();
+
+        ESP_LOGI(TAG, "%s VALUE READ: %d\n", sensor_type, value);  
+    }
+    */
+
+    /*
     // perform sensor readouts
     if (boot_count % FREQ_TEMPERATURE == 0) {
         // Init temp sensor
@@ -238,7 +254,7 @@ void app_main()
 
         ESP_LOGI(TAG, "Read out data stored");
     }
-
+    */
     
     ESP_ERROR_CHECK( nvs_flash_init() );
 
@@ -388,15 +404,6 @@ void app_main()
     esp_deep_sleep(1000000LL * DEEP_SLEEP_DELAY);
 }
 
-
-int read_adc1_value(int ADC1_CHANNEL)  // TODO check if we need it all every time
-{
-    esp_adc_cal_characteristics_t characteristics_gt;
-    adc1_config_channel_atten(ADC1_CHANNEL, ADC_ATTEN_11db);  
-    esp_adc_cal_get_characteristics(V_REF, ADC_ATTEN_11db, ADC_WIDTH_BIT_12, &characteristics_gt);
-
-    return adc1_to_voltage(ADC1_CHANNEL, &characteristics_gt);
-}
 
 static void initialize_sntp(void)
 {
