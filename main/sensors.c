@@ -14,13 +14,19 @@
 #define ADC1_FERT_CHANNEL (ADC1_CHANNEL_6)  // GPIO 34, A2 Feather
 #define ADC1_LIGHT_CHANNEL (ADC1_CHANNEL_0) // GPIO 36, A4 Feather
 
+
+#define FREQ_TEMPERATURE 1      // read out temperatute every X reboots
+#define FREQ_LIGHT 1            // read out light every X reboots
+#define FREQ_SOIL 2             // read out soil every X reboots
+
+
 // logging tag
 static const char *TAG = "sensors";
 
 
 int read_temperature_value()
 {
-    ESP_LOGI(TAG, "Reading temperature sensor\n");
+    ESP_LOGI(TAG, "Reading temperature sensor");
     ds18b20_init(ADC1_TEMP_CHANNEL);
 
     float temp = ds18b20_get_temp() * 100;  // 0.2f to int
@@ -31,14 +37,14 @@ int read_temperature_value()
 
 int read_fertility_value()
 {
-    ESP_LOGI(TAG, "Reading fertility sensor\n");
+    ESP_LOGI(TAG, "Reading fertility sensor");
     return read_adc1_value(ADC1_FERT_CHANNEL);
 }
 
 
 int read_light_value()
 {
-    ESP_LOGI(TAG, "Reading light sensor\n");
+    ESP_LOGI(TAG, "Reading light sensor");
     return read_adc1_value(ADC1_LIGHT_CHANNEL);
 }
 
@@ -67,18 +73,21 @@ void sensor_settings_init(sensor_settings_t* buffer)
     sensor_settings_t temp_sensor = {
         .code = "TMP",
         .filepath = "/spiffs/temperature.txt",
+        .read_frequency = 1,
         .read = read_temperature_value
     };
 
     sensor_settings_t fert_sensor = {
         .code = "FER",
         .filepath = "/spiffs/fertility.txt",
+        .read_frequency = 2,
         .read = read_fertility_value
     };
 
     sensor_settings_t light_sensor = {
         .code = "LUM",
         .filepath = "/spiffs/light.txt",
+        .read_frequency = 1,
         .read = read_light_value
     };
 

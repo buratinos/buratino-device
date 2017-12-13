@@ -4,6 +4,7 @@ typedef int (*read_value)();
 typedef struct {
     const char* code;
     const char* filepath;
+    int read_frequency;
     read_value read;
 } sensor_settings_t;
 
