@@ -13,8 +13,8 @@
 static const char *TAG = "storage";
 
 
-void get_filepath_for_type(const char* sensor_type, char* filepath);
-int count_line_number(char* filepath);
+void get_filepath_for_type(const char *sensor_type, char *filepath);
+int count_line_number(char *filepath);
     
 
 void storage_init()
@@ -52,14 +52,14 @@ void storage_init()
 }
 
 
-void dump_readout(const char* sensor_type, unsigned long at_time, int value)
+void dump_readout(const char *sensor_type, unsigned long at_time, int value)
 {
     ESP_LOGI(TAG, "Dumping %s readout at %lu with value: %d", sensor_type, at_time, value);
 
     char filepath[64];
     get_filepath_for_type(sensor_type, filepath);
 
-    FILE* f = fopen(filepath, "a");
+    FILE *f = fopen(filepath, "a");
     if (f == NULL) {
         ESP_LOGE(TAG, "Failed to open %s file for writing", filepath);
         return;
@@ -70,7 +70,7 @@ void dump_readout(const char* sensor_type, unsigned long at_time, int value)
 }
 
 
-int get_readouts_count(const char* sensor_type)
+int get_readouts_count(const char *sensor_type)
 {
     char filepath[64];
     get_filepath_for_type(sensor_type, filepath);
@@ -79,12 +79,12 @@ int get_readouts_count(const char* sensor_type)
 }
 
 
-void get_readouts(const char* sensor_type, unsigned long* times, int* values)
+void get_readouts(const char *sensor_type, unsigned long *times, int *values)
 {
     char filepath[64];
     get_filepath_for_type(sensor_type, filepath);
 
-    FILE* f = fopen(filepath, "r");
+    FILE *f = fopen(filepath, "r");
     if (f == NULL) {
         ESP_LOGE(TAG, "Failed to open readout file for reading");
         return;
@@ -94,8 +94,8 @@ void get_readouts(const char* sensor_type, unsigned long* times, int* values)
     int line_idx = 0;
 
     while (fgets(line, 64, f)) {    
-        char* t_from_reboot = strtok (line, " ");  // in ms
-        char* readout_value = strtok (NULL, " ");
+        char *t_from_reboot = strtok (line, " ");  // in ms
+        char *readout_value = strtok (NULL, " ");
         readout_value[strlen(readout_value) - 1] = 0;  // remove \n
 
         times[line_idx] = *t_from_reboot;
@@ -105,7 +105,7 @@ void get_readouts(const char* sensor_type, unsigned long* times, int* values)
 }
 
 
-void flush_readouts(const char* sensor_type)
+void flush_readouts(const char *sensor_type)
 {
     char filepath[64];
     get_filepath_for_type(sensor_type, filepath);
@@ -125,17 +125,17 @@ void storage_close()
 }
 
 
-void get_filepath_for_type(const char* sensor_type, char* filepath)
+void get_filepath_for_type(const char *sensor_type, char *filepath)
 {
     sprintf(filepath, "/spiffs/%s.txt", sensor_type);
 }
 
 
-int count_line_number(char* filepath) {
+int count_line_number(char *filepath) {
     int lines = 0;
     int ch;
 
-    FILE* f = fopen(filepath, "r");
+    FILE *f = fopen(filepath, "r");
     if (f == NULL) {
         return 0;
     }

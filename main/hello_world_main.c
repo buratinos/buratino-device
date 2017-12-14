@@ -40,7 +40,7 @@
 #include "lwip/netdb.h"
 #include "lwip/dns.h"
 
-#include "apps/sntp/sntp.h"
+
 #include "utils.h"
 #include "sensors.h"
 #include "storage.h"
@@ -73,7 +73,7 @@ RTC_DATA_ATTR static int boot_count = 0;
 RTC_DATA_ATTR static struct timeval sleep_enter_time;
 
 
-static void http_get_task(char* REQUEST);
+static void http_get_task(char *REQUEST);
 
 
 
@@ -97,7 +97,7 @@ void app_main()
     ESP_ERROR_CHECK( nvs_flash_init() );
 
     // init sensor settings
-    sensor_settings_t* sensors = malloc(sizeof(sensor_settings_t) * get_sensor_number());
+    sensor_settings_t *sensors = malloc(sizeof(sensor_settings_t) * get_sensor_number());
     sensor_settings_init(sensors);
 
 
@@ -156,9 +156,9 @@ void app_main()
             if (readout_cnt == 0) {
                 continue;
             }
-            unsigned long* times = malloc(readout_cnt * sizeof(unsigned long));
-            int* values = malloc(readout_cnt * sizeof(unsigned long));
-            char* req_body = malloc(readout_cnt * 128);
+            unsigned long *times = malloc(readout_cnt * sizeof(unsigned long));
+            int *values = malloc(readout_cnt * sizeof(unsigned long));
+            char *req_body = malloc(readout_cnt * 128);
 
             strcpy(req_body,  "[");
 
@@ -195,7 +195,7 @@ void app_main()
                 "\r\n", strlen(req_body));
 
             
-            char* request = malloc(strlen(req_header) + strlen(req_body)); 
+            char *request = malloc(strlen(req_header) + strlen(req_body)); 
             strcpy(request,  req_header);
             strcat(request,  req_body);
 
@@ -223,7 +223,7 @@ void app_main()
 }
 
 
-static void http_get_task(char* REQUEST)
+static void http_get_task(char *REQUEST)
 {
     const struct addrinfo hints = {
         .ai_family = AF_INET,

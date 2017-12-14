@@ -65,7 +65,7 @@ int get_sensor_number()
 }
 
 
-void sensor_settings_init(sensor_settings_t* buffer)
+void sensor_settings_init(sensor_settings_t *buffer)
 {
     ESP_LOGI(TAG, "Setting up analog channels\n");
     adc1_config_width(ADC_WIDTH_BIT_12);

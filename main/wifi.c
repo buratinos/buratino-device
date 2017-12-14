@@ -10,9 +10,7 @@
 #include "esp_event_loop.h"
 #include "esp_log.h"
 #include "esp_attr.h"
-//#include "esp_sleep.h"
-//#include "nvs_flash.h"
-
+ 
 #include "lwip/err.h"
 #include "apps/sntp/sntp.h"
 #include "wifi.h"
