@@ -46,6 +46,8 @@
 #define DEEP_SLEEP_DELAY 500     // delay between reboots, in ms
 #define FREQ_SYNC 1             // sync data to the server every X reboots
 
+#define BLINK_GPIO 13
+
 #define DEVICE_ID "2e52e67d-d0f5-4f87-b7b6-9aae97a42623"
 
 // logging tag
@@ -60,13 +62,17 @@ RTC_DATA_ATTR static struct timeval sleep_enter_time;
 
 
 static void get_readouts_as_json(const char *sensor_type, char *json_string);
-void build_POST_request(const char *json_body, char *request);
 
 
 void app_main()
 {
     ++boot_count;
     ESP_LOGI(TAG, "Boot count: %d", boot_count);  // boot counts between deep sleep sessions
+
+    // flash red LED to indicate awake state
+    gpio_pad_select_gpio(BLINK_GPIO);
+    gpio_set_direction(BLINK_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_level(BLINK_GPIO, 1);
 
     struct timeval now;
 
@@ -165,10 +171,14 @@ void app_main()
     // unmount SPIFFS filesystem
     storage_close();
 
+    // turn off red LED
+    gpio_set_level(BLINK_GPIO, 0);
+
     //const int deep_sleep_sec = 10;
     ESP_LOGI(TAG, "Entering deep sleep for %d seconds", DEEP_SLEEP_DELAY);
     esp_deep_sleep(1000000LL * DEEP_SLEEP_DELAY);
 }
+
 
 
 static void get_readouts_as_json(const char *sensor_type, char *json_string)
@@ -208,5 +218,3 @@ static void get_readouts_as_json(const char *sensor_type, char *json_string)
     free(times);
     free(values);
 }
-
-
