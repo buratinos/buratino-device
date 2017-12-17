@@ -38,13 +38,14 @@
 #include "storage.h"
 #include "wifi.h"
 #include "http.h"
+#include <driver/dac.h>
 
 
 /* Sheduling configuration
    TODO: make configurable by the user
 */ 
-#define DEEP_SLEEP_DELAY 500     // delay between reboots, in ms
-#define FREQ_SYNC 1             // sync data to the server every X reboots
+#define DEEP_SLEEP_DELAY 10     // delay between reboots, in ms
+#define FREQ_SYNC 100             // sync data to the server every X reboots
 
 #define BLINK_GPIO 13
 
@@ -73,6 +74,10 @@ void app_main()
     gpio_pad_select_gpio(BLINK_GPIO);
     gpio_set_direction(BLINK_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_level(BLINK_GPIO, 1);
+
+    // enable output voltage for sensors
+    dac_output_enable(DAC_CHANNEL_2);
+    dac_output_voltage(DAC_CHANNEL_2, 255);
 
     struct timeval now;
 
@@ -154,12 +159,12 @@ void app_main()
 
             // SYNC data
             //xTaskCreate(&http_POST, "http_POST", 4096, NULL, 5, NULL);
-            int status = http_POST(request);
+            //int status = http_POST(request);
 
-            if (status == 201) {
-                ESP_LOGI(TAG, "Sync successful, cleaning stored readouts for %s", sensors[i].code);
-                flush_readouts(sensors[i].code);
-            }
+            //if (status == 201) {
+            //    ESP_LOGI(TAG, "Sync successful, cleaning stored readouts for %s", sensors[i].code);
+            //    flush_readouts(sensors[i].code);
+            //}
 
             free(json_string);
             free(request);
@@ -170,6 +175,10 @@ void app_main()
 
     // unmount SPIFFS filesystem
     storage_close();
+
+    // disable sensor power
+    dac_output_voltage(DAC_CHANNEL_2, 0);
+    dac_output_disable(DAC_CHANNEL_2);
 
     // turn off red LED
     gpio_set_level(BLINK_GPIO, 0);
