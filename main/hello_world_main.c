@@ -44,11 +44,9 @@
 /* Sheduling configuration
    TODO: make configurable by the user
 */ 
-#define DEEP_SLEEP_DELAY 10     // delay between reboots, in ms
+#define DEEP_SLEEP_DELAY 20       // delay between reboots, in ms
 #define FREQ_SYNC 100             // sync data to the server every X reboots
-
 #define BLINK_GPIO 13
-
 #define DEVICE_ID "2e52e67d-d0f5-4f87-b7b6-9aae97a42623"
 
 // logging tag
@@ -99,8 +97,19 @@ void app_main()
 
 
     switch (esp_sleep_get_wakeup_cause()) {
-        case ESP_SLEEP_WAKEUP_UNDEFINED: {
+        case ESP_SLEEP_WAKEUP_EXT1: {
+            uint64_t wakeup_pin_mask = esp_sleep_get_ext1_wakeup_status();
+            if (wakeup_pin_mask != 0) {
+                int pin = __builtin_ffsll(wakeup_pin_mask) - 1;
+                ESP_LOGI(TAG, "WAKE UP FROM GPIO %d\n", pin);
 
+            } else {
+                ESP_LOGI(TAG, "WAKE UP FROM GPIO\n");
+            }
+            break;
+        }
+
+        case ESP_SLEEP_WAKEUP_UNDEFINED: {
             // not a deep sleep reboot
             ESP_LOGI(TAG, "Cleaning readout data files");
 
@@ -108,6 +117,7 @@ void app_main()
                 flush_readouts(sensors[i].code);
             }
         }
+
         default:
             ESP_LOGI(TAG, "Normal deep sleep reboot\n");
     }
@@ -176,6 +186,12 @@ void app_main()
     // unmount SPIFFS filesystem
     storage_close();
 
+    const int ext_wakeup_pin_1 = 25;
+    const uint64_t ext_wakeup_pin_1_mask = 1ULL << ext_wakeup_pin_1;
+
+    ESP_LOGI(TAG, "Enabling EXT1 wakeup on pins GPIO%d\n", ext_wakeup_pin_1);
+    esp_sleep_enable_ext1_wakeup(ext_wakeup_pin_1_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
+
     // disable sensor power
     dac_output_voltage(DAC_CHANNEL_2, 0);
     dac_output_disable(DAC_CHANNEL_2);
@@ -187,7 +203,6 @@ void app_main()
     ESP_LOGI(TAG, "Entering deep sleep for %d seconds", DEEP_SLEEP_DELAY);
     esp_deep_sleep(1000000LL * DEEP_SLEEP_DELAY);
 }
-
 
 
 static void get_readouts_as_json(const char *sensor_type, char *json_string)
