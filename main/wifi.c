@@ -11,7 +11,10 @@
 #include "esp_log.h"
 #include "esp_attr.h"
 #include "esp_smartconfig.h"
- 
+
+#include "nvs_flash.h"
+#include "nvs.h"
+
 #include "lwip/err.h"
 #include "apps/sntp/sntp.h"
 #include "wifi.h"
@@ -20,12 +23,16 @@
 #define WIFI_SSID "Tech_D0048070"
 #define WIFI_PASS "UREZYUND"
 
+#define WIFI_NVS_NAMESPACE "wifi"
+
 /* The event group allows multiple bits for each event,
    but we only care about one event - are we connected
    to the AP with an IP? */
 const int CONNECTED_BIT = BIT0;
-const int ESP_TOUCH_CONFIG_BIT = BIT4;
 const int ESPTOUCH_DONE_BIT = BIT1;
+const int ESP_TOUCH_CONFIG_BIT = BIT4;
+const int WIFI_NOT_SET_BIT = BIT5;
+
    
 
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
@@ -36,6 +43,9 @@ static const char *TAG = "wifi";
 
 static esp_err_t event_handler(void *ctx, system_event_t *event);
 void smartconfig_task(void * parm);
+static esp_err_t read_wifi_credentials(char *ssid, char *passwd);
+static esp_err_t save_wifi_credentials(const char *ssid, const char *passwd);
+
 
 
 void obtain_time()
@@ -85,17 +95,34 @@ void initialise_wifi(EventGroupHandle_t event_group)
 
     EventBits_t uxBits;
     uxBits = xEventGroupGetBits(wifi_event_group);
-    if( ( uxBits & ESP_TOUCH_CONFIG_BIT ) == 0 )
+    if( ( uxBits & ESP_TOUCH_CONFIG_BIT ) == 0 )  // normal connect mode
     {
-        wifi_config_t wifi_config = {
-            .sta = {
-                .ssid = WIFI_SSID,
-                .password = WIFI_PASS,
-            },
-        };
-        ESP_LOGI(TAG, "Setting WiFi configuration SSID %s...", wifi_config.sta.ssid);
-        ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
-    }
+        char *ssid = malloc(32 * sizeof(size_t));
+        char *passwd = malloc(64 * sizeof(size_t));
+
+ 
+        esp_err_t err;
+        err = read_wifi_credentials(ssid, passwd);
+
+        if (err == ESP_OK) {
+            wifi_sta_config_t sta;
+            memcpy(sta.ssid, ssid, 32 * sizeof(size_t));
+            memcpy(sta.password, passwd, 64 * sizeof(size_t));
+
+            wifi_config_t wifi_config;
+            wifi_config.sta = sta;
+
+            ESP_LOGI(TAG, "Setting WiFi configuration SSID %s...", wifi_config.sta.ssid);
+            ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );    
+        }
+        else
+        {
+            uxBits = xEventGroupSetBits(wifi_event_group, WIFI_NOT_SET_BIT);
+            ESP_LOGI(TAG, "WiFi configuration is not set.");
+            return;
+        }
+
+    }  // ESPTOUCH mode
 
     ESP_ERROR_CHECK( esp_wifi_start() );
 }
@@ -116,6 +143,7 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
         }
         else
         {
+            // regular wifi connect mode
             esp_wifi_connect();
         }    
         break;
@@ -160,6 +188,9 @@ static void sc_callback(smartconfig_status_t status, void *pdata)
             wifi_config_t *wifi_config = pdata;
             ESP_LOGI(TAG, "SSID:%s", wifi_config->sta.ssid);
             ESP_LOGI(TAG, "PASSWORD:%s", wifi_config->sta.password);
+
+            save_wifi_credentials((const char*)wifi_config->sta.ssid, (const char*)wifi_config->sta.password);
+
             ESP_ERROR_CHECK( esp_wifi_disconnect() );
             ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, wifi_config) );
             ESP_ERROR_CHECK( esp_wifi_connect() );
@@ -194,4 +225,55 @@ void smartconfig_task(void * parm)
             vTaskDelete(NULL);
         }
     }
+}
+
+
+static esp_err_t save_wifi_credentials(const char *ssid, const char *passwd)
+{
+    nvs_handle my_handle;
+    esp_err_t err;
+
+    ESP_LOGI(TAG, "Saving WiFi credentials ssid: %s, pass: %s", ssid, passwd);
+
+    err = nvs_open(WIFI_NVS_NAMESPACE, NVS_READWRITE, &my_handle);
+    if (err != ESP_OK) return err;
+
+    err = nvs_set_blob(my_handle, "ssid", ssid, strlen(ssid));
+    err = nvs_set_blob(my_handle, "passwd", passwd, strlen(passwd));
+    err = nvs_commit(my_handle);
+    
+    if (err != ESP_OK) return err;
+    nvs_close(my_handle);
+    
+    return ESP_OK;
+}
+
+
+static esp_err_t read_wifi_credentials(char *ssid, char *passwd)
+{
+    nvs_handle my_handle;
+    esp_err_t err;
+
+    err = nvs_open(WIFI_NVS_NAMESPACE, NVS_READWRITE, &my_handle);
+    if (err != ESP_OK) return err;
+
+    size_t ssid_size = 0;  // value will default to 0, if not set yet in NVS
+    err = nvs_get_blob(my_handle, "ssid", NULL, &ssid_size);
+    if (err == ESP_ERR_NVS_NOT_FOUND) return err;
+
+    size_t passwd_size = 0;  // value will default to 0, if not set yet in NVS    
+    err = nvs_get_blob(my_handle, "passwd", NULL, &passwd_size);
+    if (err == ESP_ERR_NVS_NOT_FOUND) return err;
+
+    // Read previously saved blob if available
+    if (ssid_size > 0 && passwd_size > 0) {
+        nvs_get_blob(my_handle, "ssid", ssid, &ssid_size);
+        nvs_get_blob(my_handle, "passwd", passwd, &passwd_size);
+    }
+    else 
+    {
+        return ESP_ERR_NVS_NOT_FOUND;
+    }
+
+    return ESP_OK;
 }

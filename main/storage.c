@@ -99,7 +99,7 @@ void get_readouts(const char *sensor_type, unsigned long *times, int *values)
         readout_value[strlen(readout_value) - 1] = 0;  // remove \n
 
         times[line_idx] = *t_from_reboot;
-        values[line_idx] = *readout_value;
+        values[line_idx] = (int)*readout_value;
     }
     fclose(f);
 }

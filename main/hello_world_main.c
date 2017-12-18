@@ -157,7 +157,12 @@ void app_main()
                 localtime_r(&time_now, &timeinfo);
 
                 initialise_wifi(wf_event_group);
-                uxBits = xEventGroupWaitBits(wf_event_group, CONNECTED_BIT, false, true, WIFI_CONNECT_TIMEOUT / portTICK_PERIOD_MS);
+                uxBits = xEventGroupWaitBits(
+                    wf_event_group, 
+                    CONNECTED_BIT | WIFI_NOT_SET_BIT, 
+                    false, false, 
+                    WIFI_CONNECT_TIMEOUT / portTICK_PERIOD_MS
+                );
 
                 if( ( uxBits & CONNECTED_BIT ) != 0 )
                 {
@@ -176,9 +181,13 @@ void app_main()
                         sync_over_http(sensors[i]);
                     }
                 }
+                else if( ( uxBits & WIFI_NOT_SET_BIT ) != 0 ) 
+                {
+                    ESP_LOGE(TAG, "WiFi not set, try to use ESPTOUCH via button.");
+                }
                 else
                 {
-                    ESP_LOGE(TAG, "Unable to connect to a WiFi network within %d secs", WIFI_CONNECT_TIMEOUT / 1000);
+                    ESP_LOGE(TAG, "WiFi timeout - unable to connect within %d secs", WIFI_CONNECT_TIMEOUT / 1000);
                 }
                 stop_wifi();
             }
@@ -245,7 +254,7 @@ static void get_readouts_as_json(const char *sensor_type, char *json_string)
     char curr_time_buf[64];
     struct tm timeinfo;
     unsigned long *times = malloc(readout_cnt * sizeof(unsigned long));
-    int *values = malloc(readout_cnt * sizeof(unsigned long));
+    int *values = malloc(readout_cnt * sizeof(int));
 
     get_readouts(sensor_type, times, values);
 
