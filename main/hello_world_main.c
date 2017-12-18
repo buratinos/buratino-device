@@ -136,14 +136,14 @@ void app_main()
             // not a deep sleep reboot
             ESP_LOGI(TAG, "Cleaning readout data files");
 
-            for (int i = 0; i < get_sensor_number(); i++) {
+            for (int i = 0; i < sizeof(sensors)/sizeof(sensor_settings_t); i++) {
                 flush_readouts(sensors[i].code);
             }
         }
 
         default:
             // perform sensor readouts TODO get via xQueue?
-            for (int i = 0; i < get_sensor_number(); i++) {
+            for (int i = 0; i < sizeof(sensors)/sizeof(sensor_settings_t); i++) {
                 if (boot_count % sensors[i].read_frequency == 0) {
                     dump_readout(sensors[i].code, sleep_time_ms, sensors[i].read());    
                 }
@@ -172,7 +172,7 @@ void app_main()
                     gettimeofday(&act_time, NULL);
                     sleep_enter_time.tv_sec = act_time.tv_sec - sleep_time_ms / 1000;
 
-                    for (int i = 0; i < get_sensor_number(); i++) {  // TODO remove get_sensor_number
+                    for (int i = 0; i < sizeof(sensors)/sizeof(sensor_settings_t); i++) {
                         sync_over_http(sensors[i]);
                     }
                 }

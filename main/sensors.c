@@ -122,12 +122,6 @@ int read_adc1_value(int ADC1_CHANNEL)  // TODO check if we need it all every tim
 }
 
 
-int get_sensor_number()
-{
-    return 4;
-}
-
-
 void sensor_settings_init()
 {
     ESP_LOGI(TAG, "Setting up analog channels\n");
