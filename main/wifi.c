@@ -23,20 +23,24 @@
    but we only care about one event - are we connected
    to the AP with an IP? */
 const int CONNECTED_BIT = BIT0;
+const int ESP_TOUCH_CONFIG_BIT = BIT4;
+   
 
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
-static EventGroupHandle_t wifi_event_group;
+EventGroupHandle_t wifi_event_group;
 
 // logging tag
 static const char *TAG = "wifi";
 
-static void initialize_sntp(void);
 static esp_err_t event_handler(void *ctx, system_event_t *event);
 
 
 void obtain_time()
 {
-    initialize_sntp();
+    ESP_LOGI(TAG, "Initializing SNTP");
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_setservername(0, "pool.ntp.org");
+    sntp_init();
     
     // wait for time to be set
     time_t time_now = 0;
@@ -55,7 +59,7 @@ void obtain_time()
     time(&time_now);
 
     // Set timezone to Eastern Standard Time and print local time
-    setenv("TZ", "EST5EDT, M3.2.0/2, M11.1.0", 1);
+    setenv("TZ", "EST5EDT, M3.2.0/2, M11.1.0", 1);  // TODO get proper TZ
     tzset();
     localtime_r(&time_now, &timeinfo);
 
@@ -65,18 +69,10 @@ void obtain_time()
 }
 
 
-static void initialize_sntp(void)
-{
-    ESP_LOGI(TAG, "Initializing SNTP");
-    sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    sntp_setservername(0, "pool.ntp.org");
-    sntp_init();
-}
-
-void initialise_wifi(void)
+void initialise_wifi(EventGroupHandle_t event_group)
 {
     tcpip_adapter_init();
-    wifi_event_group = xEventGroupCreate();
+    wifi_event_group = event_group;
     ESP_ERROR_CHECK( esp_event_loop_init(event_handler, NULL) );
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
@@ -93,13 +89,22 @@ void initialise_wifi(void)
     ESP_ERROR_CHECK( esp_wifi_start() );
 
     /* Waiting for connection */
-    xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
+    //xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
 }
 
 static esp_err_t event_handler(void *ctx, system_event_t *event)
 {
+    EventBits_t uxBits;
+
     switch(event->event_id) {
     case SYSTEM_EVENT_STA_START:
+        uxBits = xEventGroupGetBits(wifi_event_group);
+        if( ( uxBits & ESP_TOUCH_CONFIG_BIT ) != 0 )
+        {
+            // ESPTOUCH mode is enabled
+            ESP_LOGI(TAG, "ESPTOUCH BIT IS SET !!!!!!!!");
+        }
+
         esp_wifi_connect();
         break;
     case SYSTEM_EVENT_STA_GOT_IP:

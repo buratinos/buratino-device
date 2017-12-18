@@ -43,6 +43,8 @@
 // logging tag
 static const char *TAG = "sensors";
 
+sensor_settings_t sensors[4];
+
 
 int read_temperature_value()
 {
@@ -126,7 +128,7 @@ int get_sensor_number()
 }
 
 
-void sensor_settings_init(sensor_settings_t *buffer)
+void sensor_settings_init()
 {
     ESP_LOGI(TAG, "Setting up analog channels\n");
 
@@ -174,9 +176,9 @@ void sensor_settings_init(sensor_settings_t *buffer)
         .read_frequency = FREQ_SOIL,
         .read = read_soil_value
     };
-
-    buffer[0] = temp_sensor;
-    buffer[1] = fert_sensor;
-    buffer[2] = light_sensor;
-    buffer[3] = soil_sensor;
+    
+    sensors[0] = temp_sensor;
+    sensors[1] = fert_sensor;
+    sensors[2] = light_sensor;
+    sensors[3] = soil_sensor;    
 }

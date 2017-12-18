@@ -45,9 +45,13 @@
    TODO: make configurable by the user
 */ 
 #define DEEP_SLEEP_DELAY 20       // delay between reboots, in ms
-#define FREQ_SYNC 100             // sync data to the server every X reboots
+#define FREQ_SYNC 1             // sync data to the server every X reboots
 #define BLINK_GPIO 13
+#define EXT_WAKEUP_GPIO 25        // GPIO 25 / A0
 #define DEVICE_ID "2e52e67d-d0f5-4f87-b7b6-9aae97a42623"
+#define WIFI_CONNECT_TIMEOUT 30000  // in ms
+
+
 
 // logging tag
 static const char *TAG = "main";
@@ -61,7 +65,7 @@ RTC_DATA_ATTR static struct timeval sleep_enter_time;
 
 
 static void get_readouts_as_json(const char *sensor_type, char *json_string);
-
+static void sync_over_http(sensor_settings_t sensor);
 
 void app_main()
 {
@@ -92,8 +96,7 @@ void app_main()
     ESP_ERROR_CHECK( nvs_flash_init() );
 
     // init sensor settings
-    sensor_settings_t *sensors = malloc(sizeof(sensor_settings_t) * get_sensor_number());
-    sensor_settings_init(sensors);
+    sensor_settings_init();
 
 
     switch (esp_sleep_get_wakeup_cause()) {
@@ -119,68 +122,51 @@ void app_main()
         }
 
         default:
-            ESP_LOGI(TAG, "Normal deep sleep reboot\n");
-    }
-
-    // perform sensor readouts
-    for (int i = 0; i < get_sensor_number(); i++) {
-        if (boot_count % sensors[i].read_frequency == 0) {
-            dump_readout(sensors[i].code, sleep_time_ms, sensors[i].read());    
-        }
-    }
-
-
-    struct tm timeinfo;
-    // sync data to the cloud
-    if (boot_count % FREQ_SYNC == 0) {
-        time_t time_now;
-        time(&time_now);
-        localtime_r(&time_now, &timeinfo);
-
-        initialise_wifi();
-
-        // Is time set? If not, tm_year will be (1970 - 1900).
-        if (timeinfo.tm_year < (2016 - 1900)) {
-            ESP_LOGI(TAG, "Time is not set yet. Getting time over NTP.");
-            
-            obtain_time();
-        }
- 
-        // update sleep enter time
-        struct timeval act_time;
-        gettimeofday(&act_time, NULL);
-        sleep_enter_time.tv_sec = act_time.tv_sec - sleep_time_ms / 1000;
-
-        for (int i = 0; i < get_sensor_number(); i++) {
-            int readout_cnt = get_readouts_count(sensors[i].code);
-            
-            if (readout_cnt == 0) {
-                continue;
+            // perform sensor readouts TODO get via xQueue?
+            for (int i = 0; i < get_sensor_number(); i++) {
+                if (boot_count % sensors[i].read_frequency == 0) {
+                    dump_readout(sensors[i].code, sleep_time_ms, sensors[i].read());    
+                }
             }
+            
+            // sync data to the cloud
+            if (boot_count % FREQ_SYNC == 0) {
+                struct tm timeinfo;
+                time_t time_now;
+                time(&time_now);
+                localtime_r(&time_now, &timeinfo);
 
-            // reading stored sensor values to a buffer
-            char *json_string = malloc(readout_cnt * 128);
-            get_readouts_as_json(sensors[i].code, json_string);
+                EventBits_t uxBits;
+                EventGroupHandle_t wf_event_group = xEventGroupCreate();
+                uxBits = xEventGroupSetBits(wf_event_group, ESP_TOUCH_CONFIG_BIT);
 
-            char *request = malloc(1024 + strlen(json_string)); 
-            build_POST_request(json_string, request);
+                initialise_wifi(wf_event_group);
+                
+                uxBits = xEventGroupWaitBits(wf_event_group, CONNECTED_BIT, false, true, WIFI_CONNECT_TIMEOUT / portTICK_PERIOD_MS);
 
-            ESP_LOGI(TAG, "FULL REQUEST: \n%s", request);
+                if( ( uxBits & CONNECTED_BIT ) != 0 )
+                {
+                    // Is time set? If not, tm_year will be (1970 - 1900).
+                    if (timeinfo.tm_year < (2016 - 1900)) {
+                        ESP_LOGI(TAG, "Time is not set yet. Getting time over NTP.");
+                        obtain_time();  // TODO do something if failed
+                    }
+            
+                    // update sleep enter time
+                    struct timeval act_time;
+                    gettimeofday(&act_time, NULL);
+                    sleep_enter_time.tv_sec = act_time.tv_sec - sleep_time_ms / 1000;
 
-            // SYNC data
-            //xTaskCreate(&http_POST, "http_POST", 4096, NULL, 5, NULL);
-            //int status = http_POST(request);
-
-            //if (status == 201) {
-            //    ESP_LOGI(TAG, "Sync successful, cleaning stored readouts for %s", sensors[i].code);
-            //    flush_readouts(sensors[i].code);
-            //}
-
-            free(json_string);
-            free(request);
-        }
-    
-        stop_wifi();
+                    for (int i = 0; i < get_sensor_number(); i++) {  // TODO remove get_sensor_number
+                        sync_over_http(sensors[i]);
+                    }
+                }
+                else
+                {
+                    ESP_LOGE(TAG, "Unable to connect to a WiFi network within %d secs", WIFI_CONNECT_TIMEOUT / 1000);
+                }
+                stop_wifi();
+            }
     }
 
     // unmount SPIFFS filesystem
@@ -189,6 +175,7 @@ void app_main()
     const int ext_wakeup_pin_1 = 25;
     const uint64_t ext_wakeup_pin_1_mask = 1ULL << ext_wakeup_pin_1;
 
+    // enable wakeup from EXT1
     ESP_LOGI(TAG, "Enabling EXT1 wakeup on pins GPIO%d\n", ext_wakeup_pin_1);
     esp_sleep_enable_ext1_wakeup(ext_wakeup_pin_1_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
 
@@ -202,6 +189,37 @@ void app_main()
     //const int deep_sleep_sec = 10;
     ESP_LOGI(TAG, "Entering deep sleep for %d seconds", DEEP_SLEEP_DELAY);
     esp_deep_sleep(1000000LL * DEEP_SLEEP_DELAY);
+}
+
+
+static void sync_over_http(sensor_settings_t sensor)
+{
+    int readout_cnt = get_readouts_count(sensor.code);
+    
+    if (readout_cnt == 0) {
+        return;
+    }
+
+    // reading stored sensor values to a buffer
+    char *json_string = malloc(readout_cnt * 128);
+    get_readouts_as_json(sensor.code, json_string);
+
+    char *request = malloc(1024 + strlen(json_string)); 
+    build_POST_request(json_string, request);
+
+    ESP_LOGI(TAG, "FULL REQUEST: \n%s", request);
+
+    // SYNC data
+    //xTaskCreate(&http_POST, "http_POST", 4096, NULL, 5, NULL);
+    //int status = http_POST(request);
+
+    //if (status == 201) {
+    //    ESP_LOGI(TAG, "Sync successful, cleaning stored readouts for %s", sensors[i].code);
+    //    flush_readouts(sensors[i].code);
+    //}
+
+    free(json_string);
+    free(request);
 }
 
 

@@ -8,10 +8,13 @@ typedef struct {
     read_value read;
 } sensor_settings_t;
 
+
+extern sensor_settings_t sensors[4];
+
 int read_temperature_value();
 int read_fertility_value();
 int read_light_value();
 int read_adc1_value(int ADC1_CHANNEL);
 
 int get_sensor_number();
-void sensor_settings_init(sensor_settings_t *buffer);
+void sensor_settings_init();
