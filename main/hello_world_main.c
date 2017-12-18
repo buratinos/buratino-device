@@ -50,7 +50,7 @@
 #define EXT_WAKEUP_GPIO 25        // GPIO 25 / A0
 #define DEVICE_ID "2e52e67d-d0f5-4f87-b7b6-9aae97a42623"
 #define WIFI_CONNECT_TIMEOUT 30000  // in ms
-
+#define ESPTOUCH_CONNECT_TIMEOUT 60000  // in ms
 
 
 // logging tag
@@ -66,6 +66,12 @@ RTC_DATA_ATTR static struct timeval sleep_enter_time;
 
 static void get_readouts_as_json(const char *sensor_type, char *json_string);
 static void sync_over_http(sensor_settings_t sensor);
+static void blink_task(void *pvParameter);
+
+
+EventBits_t uxBits;
+static EventGroupHandle_t wf_event_group;
+
 
 void app_main()
 {
@@ -98,17 +104,31 @@ void app_main()
     // init sensor settings
     sensor_settings_init();
 
+    wf_event_group = xEventGroupCreate();
+
 
     switch (esp_sleep_get_wakeup_cause()) {
         case ESP_SLEEP_WAKEUP_EXT1: {
-            uint64_t wakeup_pin_mask = esp_sleep_get_ext1_wakeup_status();
-            if (wakeup_pin_mask != 0) {
-                int pin = __builtin_ffsll(wakeup_pin_mask) - 1;
-                ESP_LOGI(TAG, "WAKE UP FROM GPIO %d\n", pin);
+            ESP_LOGI(TAG, "WAKE UP FROM GPIO\n");
 
-            } else {
-                ESP_LOGI(TAG, "WAKE UP FROM GPIO\n");
+            uxBits = xEventGroupSetBits(wf_event_group, ESP_TOUCH_CONFIG_BIT);
+            initialise_wifi(wf_event_group);
+            
+            TaskHandle_t xBlinkHandle = NULL;
+            xTaskCreate(&blink_task, "blink_task", configMINIMAL_STACK_SIZE, NULL, 5, &xBlinkHandle);
+
+            uxBits = xEventGroupWaitBits(wf_event_group, ESPTOUCH_DONE_BIT, false, true, ESPTOUCH_CONNECT_TIMEOUT / portTICK_PERIOD_MS);
+            
+            if( ( uxBits & ESPTOUCH_DONE_BIT ) == 0 )
+            {
+                ESP_LOGE(TAG, "ESPTOUCH failed due to timeout, check settings and try again.");
             }
+
+            if( xBlinkHandle != NULL )
+            {
+                vTaskDelete( xBlinkHandle );
+            }
+
             break;
         }
 
@@ -136,12 +156,7 @@ void app_main()
                 time(&time_now);
                 localtime_r(&time_now, &timeinfo);
 
-                EventBits_t uxBits;
-                EventGroupHandle_t wf_event_group = xEventGroupCreate();
-                uxBits = xEventGroupSetBits(wf_event_group, ESP_TOUCH_CONFIG_BIT);
-
                 initialise_wifi(wf_event_group);
-                
                 uxBits = xEventGroupWaitBits(wf_event_group, CONNECTED_BIT, false, true, WIFI_CONNECT_TIMEOUT / portTICK_PERIOD_MS);
 
                 if( ( uxBits & CONNECTED_BIT ) != 0 )
@@ -259,4 +274,22 @@ static void get_readouts_as_json(const char *sensor_type, char *json_string)
 
     free(times);
     free(values);
+}
+
+
+void blink_task(void *pvParameter)
+{
+    /* Blink the available red LED
+     */
+    gpio_pad_select_gpio(BLINK_GPIO);
+    /* Set the GPIO as a push/pull output */
+    gpio_set_direction(BLINK_GPIO, GPIO_MODE_OUTPUT);
+    while(1) {
+        /* Blink off (output low) */
+        gpio_set_level(BLINK_GPIO, 0);
+        vTaskDelay(700 / portTICK_PERIOD_MS);
+        /* Blink on (output high) */
+        gpio_set_level(BLINK_GPIO, 1);
+        vTaskDelay(700 / portTICK_PERIOD_MS);
+    }
 }

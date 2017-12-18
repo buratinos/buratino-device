@@ -10,6 +10,7 @@
 #include "esp_event_loop.h"
 #include "esp_log.h"
 #include "esp_attr.h"
+#include "esp_smartconfig.h"
  
 #include "lwip/err.h"
 #include "apps/sntp/sntp.h"
@@ -24,6 +25,7 @@
    to the AP with an IP? */
 const int CONNECTED_BIT = BIT0;
 const int ESP_TOUCH_CONFIG_BIT = BIT4;
+const int ESPTOUCH_DONE_BIT = BIT1;
    
 
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
@@ -33,6 +35,7 @@ EventGroupHandle_t wifi_event_group;
 static const char *TAG = "wifi";
 
 static esp_err_t event_handler(void *ctx, system_event_t *event);
+void smartconfig_task(void * parm);
 
 
 void obtain_time()
@@ -75,22 +78,29 @@ void initialise_wifi(EventGroupHandle_t event_group)
     wifi_event_group = event_group;
     ESP_ERROR_CHECK( esp_event_loop_init(event_handler, NULL) );
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
-    ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = WIFI_SSID,
-            .password = WIFI_PASS,
-        },
-    };
-    ESP_LOGI(TAG, "Setting WiFi configuration SSID %s...", wifi_config.sta.ssid);
-    ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
-    ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
-    ESP_ERROR_CHECK( esp_wifi_start() );
 
-    /* Waiting for connection */
-    //xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
+    ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
+    ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
+    ESP_ERROR_CHECK( esp_wifi_set_storage(WIFI_STORAGE_RAM) );
+
+    EventBits_t uxBits;
+    uxBits = xEventGroupGetBits(wifi_event_group);
+    if( ( uxBits & ESP_TOUCH_CONFIG_BIT ) == 0 )
+    {
+        wifi_config_t wifi_config = {
+            .sta = {
+                .ssid = WIFI_SSID,
+                .password = WIFI_PASS,
+            },
+        };
+        ESP_LOGI(TAG, "Setting WiFi configuration SSID %s...", wifi_config.sta.ssid);
+        ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config) );
+    }
+
+    ESP_ERROR_CHECK( esp_wifi_start() );
 }
+
+
 
 static esp_err_t event_handler(void *ctx, system_event_t *event)
 {
@@ -102,10 +112,12 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
         if( ( uxBits & ESP_TOUCH_CONFIG_BIT ) != 0 )
         {
             // ESPTOUCH mode is enabled
-            ESP_LOGI(TAG, "ESPTOUCH BIT IS SET !!!!!!!!");
+            xTaskCreate(smartconfig_task, "smartconfig_task", 4096, NULL, 3, NULL);
         }
-
-        esp_wifi_connect();
+        else
+        {
+            esp_wifi_connect();
+        }    
         break;
     case SYSTEM_EVENT_STA_GOT_IP:
         xEventGroupSetBits(wifi_event_group, CONNECTED_BIT);
@@ -125,4 +137,61 @@ static esp_err_t event_handler(void *ctx, system_event_t *event)
 void stop_wifi()
 {
     ESP_ERROR_CHECK( esp_wifi_stop() );
+}
+
+
+
+
+
+static void sc_callback(smartconfig_status_t status, void *pdata)
+{
+    switch (status) {
+        case SC_STATUS_WAIT:
+            ESP_LOGI(TAG, "SC_STATUS_WAIT");
+            break;
+        case SC_STATUS_FIND_CHANNEL:
+            ESP_LOGI(TAG, "SC_STATUS_FINDING_CHANNEL");
+            break;
+        case SC_STATUS_GETTING_SSID_PSWD:
+            ESP_LOGI(TAG, "SC_STATUS_GETTING_SSID_PSWD");
+            break;
+        case SC_STATUS_LINK:
+            ESP_LOGI(TAG, "SC_STATUS_LINK");
+            wifi_config_t *wifi_config = pdata;
+            ESP_LOGI(TAG, "SSID:%s", wifi_config->sta.ssid);
+            ESP_LOGI(TAG, "PASSWORD:%s", wifi_config->sta.password);
+            ESP_ERROR_CHECK( esp_wifi_disconnect() );
+            ESP_ERROR_CHECK( esp_wifi_set_config(ESP_IF_WIFI_STA, wifi_config) );
+            ESP_ERROR_CHECK( esp_wifi_connect() );
+            break;
+        case SC_STATUS_LINK_OVER:
+            ESP_LOGI(TAG, "SC_STATUS_LINK_OVER");
+            if (pdata != NULL) {
+                uint8_t phone_ip[4] = { 0 };
+                memcpy(phone_ip, (uint8_t* )pdata, 4);
+                ESP_LOGI(TAG, "Phone ip: %d.%d.%d.%d\n", phone_ip[0], phone_ip[1], phone_ip[2], phone_ip[3]);
+            }
+            xEventGroupSetBits(wifi_event_group, ESPTOUCH_DONE_BIT);
+            break;
+        default:
+            break;
+    }
+}
+
+void smartconfig_task(void * parm)
+{
+    EventBits_t uxBits;
+    ESP_ERROR_CHECK( esp_smartconfig_set_type(SC_TYPE_ESPTOUCH) );
+    ESP_ERROR_CHECK( esp_smartconfig_start(sc_callback) );
+    while (1) {
+        uxBits = xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT | ESPTOUCH_DONE_BIT, true, false, portMAX_DELAY); 
+        if(uxBits & CONNECTED_BIT) {
+            ESP_LOGI(TAG, "WiFi Connected to ap");
+        }
+        if(uxBits & ESPTOUCH_DONE_BIT) {
+            ESP_LOGI(TAG, "smartconfig over");
+            esp_smartconfig_stop();
+            vTaskDelete(NULL);
+        }
+    }
 }
