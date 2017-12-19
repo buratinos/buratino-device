@@ -3,7 +3,7 @@
 # project subdirectory.
 #
 
-PROJECT_NAME := temp
+PROJECT_NAME := buratino
 
 include $(IDF_PATH)/make/project.mk
 
