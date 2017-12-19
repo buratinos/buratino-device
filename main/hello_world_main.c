@@ -116,7 +116,6 @@ void app_main()
             
             TaskHandle_t xBlinkHandle = NULL;
             xTaskCreate(&blink_task, "blink_task", configMINIMAL_STACK_SIZE, NULL, 5, &xBlinkHandle);
-
             uxBits = xEventGroupWaitBits(wf_event_group, ESPTOUCH_DONE_BIT, false, true, ESPTOUCH_CONNECT_TIMEOUT / portTICK_PERIOD_MS);
             
             if( ( uxBits & ESPTOUCH_DONE_BIT ) == 0 )
