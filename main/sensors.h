@@ -9,11 +9,10 @@ typedef struct {
 } sensor_settings_t;
 
 
-extern sensor_settings_t sensors[4];
+extern sensor_settings_t sensors[5];
 
 int read_temperature_value();
 int read_fertility_value();
 int read_light_value();
-int read_adc1_value(int ADC1_CHANNEL);
 
 void sensor_settings_init();

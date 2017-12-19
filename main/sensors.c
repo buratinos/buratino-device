@@ -27,7 +27,8 @@
 #define I2C_EXAMPLE_MASTER_FREQ_HZ         100000           /*!< I2C master clock frequency */
 
 #define SOIL_SENSOR_ADDR                   0x20             /*!< slave address for BH1750 sensor */
-#define SOIL_CMD_START                     0x00             /*!< Command to set measure mode */
+#define SOIL_CMD_START                     0x00             /*!< Command to set soil measure mode */
+#define TEMP_CMD_START                     0x05             /*!< Command to set temp measure mode */
 #define WRITE_BIT                          I2C_MASTER_WRITE /*!< I2C master write */
 #define READ_BIT                           I2C_MASTER_READ  /*!< I2C master read */
 #define ACK_CHECK_EN                       0x1              /*!< I2C master will check ack from slave*/
@@ -39,11 +40,14 @@
 #define FREQ_LIGHT 1            // read out light every X reboots
 #define FREQ_FERTILITY 1        // read out resistive soil every X reboots
 #define FREQ_SOIL 1             // read out capacitive soil every X reboots
+#define FREQ_PROBE_TEMP 1       // read out probe temperature every X reboots
 
 // logging tag
 static const char *TAG = "sensors";
+static int read_adc1_value(int ADC1_CHANNEL);
+static int read_i2c_value(uint8_t cmd_data);
 
-sensor_settings_t sensors[4];
+sensor_settings_t sensors[5];
 
 
 int read_temperature_value()
@@ -71,18 +75,43 @@ int read_light_value()
 }
 
 
+int read_probe_temp_value()
+{
+    ESP_LOGI(TAG, "Reading temp from the probe sensor");
+
+    uint8_t cmd_data = TEMP_CMD_START;
+    return read_i2c_value(cmd_data);
+}
+
 
 int read_soil_value()
 {
     ESP_LOGI(TAG, "Reading soil sensor");
 
+    uint8_t cmd_data = SOIL_CMD_START;
+    return read_i2c_value(cmd_data);
+}
+
+
+static int read_adc1_value(int ADC1_CHANNEL)  // TODO check if we need it all every time
+{
+    esp_adc_cal_characteristics_t characteristics_gt;
+    adc1_config_channel_atten(ADC1_CHANNEL, ADC_ATTEN_11db);  
+    esp_adc_cal_get_characteristics(V_REF, ADC_ATTEN_11db, ADC_WIDTH_BIT_12, &characteristics_gt);
+
+    return adc1_to_voltage(ADC1_CHANNEL, &characteristics_gt);
+}
+
+
+static int read_i2c_value(uint8_t cmd_data)
+{    
     uint8_t sensor_data_h, sensor_data_l;
     
     int ret;
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, SOIL_SENSOR_ADDR << 1 | WRITE_BIT, ACK_CHECK_EN);
-    i2c_master_write_byte(cmd, SOIL_CMD_START, ACK_CHECK_EN);
+    i2c_master_write_byte(cmd, cmd_data, ACK_CHECK_EN);
     i2c_master_stop(cmd);
     ret = i2c_master_cmd_begin(I2C_EXAMPLE_MASTER_NUM, cmd, 1000 / portTICK_RATE_MS);
     i2c_cmd_link_delete(cmd);
@@ -109,16 +138,6 @@ int read_soil_value()
     }
 
     return -1;
-}
-
-
-int read_adc1_value(int ADC1_CHANNEL)  // TODO check if we need it all every time
-{
-    esp_adc_cal_characteristics_t characteristics_gt;
-    adc1_config_channel_atten(ADC1_CHANNEL, ADC_ATTEN_11db);  
-    esp_adc_cal_get_characteristics(V_REF, ADC_ATTEN_11db, ADC_WIDTH_BIT_12, &characteristics_gt);
-
-    return adc1_to_voltage(ADC1_CHANNEL, &characteristics_gt);
 }
 
 
@@ -171,8 +190,16 @@ void sensor_settings_init()
         .read = read_soil_value
     };
     
+    sensor_settings_t probe_temp_sensor = {
+        .code = "PTM",
+        .filepath = "/spiffs/probetemp.txt",
+        .read_frequency = FREQ_PROBE_TEMP,
+        .read = read_probe_temp_value
+    };
+
     sensors[0] = temp_sensor;
     sensors[1] = fert_sensor;
     sensors[2] = light_sensor;
-    sensors[3] = soil_sensor;    
+    sensors[3] = probe_temp_sensor;
+    sensors[4] = soil_sensor;
 }

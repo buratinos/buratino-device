@@ -45,7 +45,7 @@
    TODO: make configurable by the user
 */ 
 #define DEEP_SLEEP_DELAY 20       // delay between reboots, in ms
-#define FREQ_SYNC 1             // sync data to the server every X reboots
+#define FREQ_SYNC 100             // sync data to the server every X reboots
 #define BLINK_GPIO 13
 #define EXT_WAKEUP_GPIO 25        // GPIO 25 / A0
 #define DEVICE_ID "2e52e67d-d0f5-4f87-b7b6-9aae97a42623"
