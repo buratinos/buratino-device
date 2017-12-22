@@ -68,10 +68,14 @@ static void get_readouts_as_json(const char *sensor_type, char *json_string);
 static void sync_over_http(sensor_settings_t sensor);
 static void blink_task(void *pvParameter);
 static void blink_success();
+static void smart_config_routine();
+static void read_sensor_routine();
+static void sync_data_routine();
 
 
 EventBits_t uxBits;
 static EventGroupHandle_t wf_event_group;
+unsigned long sleep_time_ms;
 
 
 void app_main()
@@ -88,11 +92,10 @@ void app_main()
     dac_output_enable(DAC_CHANNEL_2);
     dac_output_voltage(DAC_CHANNEL_2, 255);
 
+    // compute time spent in deep sleep
     struct timeval now;
-
     gettimeofday(&now, NULL);
-    unsigned long currentMillis = xTaskGetTickCount();
-    unsigned long sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000 + (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
+    sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000 + (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
     ESP_LOGI(TAG, "Sleep enter time: %f\n", (double)sleep_enter_time.tv_sec);
     ESP_LOGI(TAG, "Time spent in deep sleep: %lu ms\n", sleep_time_ms);
 
@@ -112,33 +115,11 @@ void app_main()
         case ESP_SLEEP_WAKEUP_EXT1: {
             ESP_LOGI(TAG, "WAKE UP FROM GPIO\n");
 
-            uxBits = xEventGroupSetBits(wf_event_group, ESP_TOUCH_CONFIG_BIT);
-            initialise_wifi(wf_event_group);
-            
-            TaskHandle_t xBlinkHandle = NULL;
-            xTaskCreate(&blink_task, "blink_task", configMINIMAL_STACK_SIZE, NULL, 5, &xBlinkHandle);
-            uxBits = xEventGroupWaitBits(wf_event_group, ESPTOUCH_DONE_BIT, false, true, ESPTOUCH_CONNECT_TIMEOUT / portTICK_PERIOD_MS);
-            
-            if( ( uxBits & ESPTOUCH_DONE_BIT ) == 0 )
-            {
-                ESP_LOGE(TAG, "ESPTOUCH failed due to timeout, check settings and try again.");
-            }
-
-            if( ( uxBits & ESPTOUCH_DONE_BIT ) != 0 )
-            {
-                blink_success();
-            }
-
-            if( xBlinkHandle != NULL )
-            {
-                vTaskDelete( xBlinkHandle );
-            }
-
+            smart_config_routine();
             break;
         }
 
-        case ESP_SLEEP_WAKEUP_UNDEFINED: {
-            // not a deep sleep reboot
+        case ESP_SLEEP_WAKEUP_UNDEFINED: { // not a deep sleep reboot, most probably time is reset
             ESP_LOGI(TAG, "Cleaning readout data files");
 
             for (int i = 0; i < sizeof(sensors)/sizeof(sensor_settings_t); i++) {
@@ -148,53 +129,11 @@ void app_main()
 
         default:
             // perform sensor readouts TODO get via xQueue?
-            for (int i = 0; i < sizeof(sensors)/sizeof(sensor_settings_t); i++) {
-                if (boot_count % sensors[i].read_frequency == 0) {
-                    dump_readout(sensors[i].code, sleep_time_ms, sensors[i].read());    
-                }
-            }
+            read_sensor_routine();
             
             // sync data to the cloud
             if (boot_count % FREQ_SYNC == 0) {
-                struct tm timeinfo;
-                time_t time_now;
-                time(&time_now);
-                localtime_r(&time_now, &timeinfo);
-
-                initialise_wifi(wf_event_group);
-                uxBits = xEventGroupWaitBits(
-                    wf_event_group, 
-                    CONNECTED_BIT | WIFI_NOT_SET_BIT, 
-                    false, false, 
-                    WIFI_CONNECT_TIMEOUT / portTICK_PERIOD_MS
-                );
-
-                if( ( uxBits & CONNECTED_BIT ) != 0 )
-                {
-                    // Is time set? If not, tm_year will be (1970 - 1900).
-                    if (timeinfo.tm_year < (2016 - 1900)) {
-                        ESP_LOGI(TAG, "Time is not set yet. Getting time over NTP.");
-                        obtain_time();  // TODO do something if failed
-                    }
-            
-                    // update sleep enter time
-                    struct timeval act_time;
-                    gettimeofday(&act_time, NULL);
-                    sleep_enter_time.tv_sec = act_time.tv_sec - sleep_time_ms / 1000;
-
-                    for (int i = 0; i < sizeof(sensors)/sizeof(sensor_settings_t); i++) {
-                        sync_over_http(sensors[i]);
-                    }
-                }
-                else if( ( uxBits & WIFI_NOT_SET_BIT ) != 0 ) 
-                {
-                    ESP_LOGE(TAG, "WiFi not set, try to use ESPTOUCH via button.");
-                }
-                else
-                {
-                    ESP_LOGE(TAG, "WiFi timeout - unable to connect within %d secs", WIFI_CONNECT_TIMEOUT / 1000);
-                }
-                stop_wifi();
+                sync_data_routine();
             }
     }
 
@@ -221,8 +160,85 @@ void app_main()
 }
 
 
+static void smart_config_routine()
+{
+    uxBits = xEventGroupSetBits(wf_event_group, ESP_TOUCH_CONFIG_BIT);
+    initialise_wifi(wf_event_group);
+    
+    TaskHandle_t xBlinkHandle = NULL;
+    xTaskCreate(&blink_task, "blink_task", configMINIMAL_STACK_SIZE, NULL, 5, &xBlinkHandle);
+    uxBits = xEventGroupWaitBits(wf_event_group, ESPTOUCH_DONE_BIT, false, true, ESPTOUCH_CONNECT_TIMEOUT / portTICK_PERIOD_MS);
+    
+    if( xBlinkHandle != NULL )
+    {
+        vTaskDelete( xBlinkHandle );
+    }
+
+    if( ( uxBits & ESPTOUCH_DONE_BIT ) == 0 )
+    {
+        ESP_LOGE(TAG, "ESPTOUCH failed due to timeout, check settings and try again.");
+    }
+    
+    if( ( uxBits & ESPTOUCH_DONE_BIT ) != 0 )
+    {
+        blink_success();
+    }
+}
 
 
+static void read_sensor_routine()
+{
+    // perform sensor readouts TODO get via xQueue?
+    for (int i = 0; i < sizeof(sensors)/sizeof(sensor_settings_t); i++) {
+        if (boot_count % sensors[i].read_frequency == 0) {
+            dump_readout(sensors[i].code, sleep_time_ms, sensors[i].read());    
+        }
+    }
+}
+
+
+static void sync_data_routine()
+{
+    struct tm timeinfo;
+    time_t time_now;
+    time(&time_now);
+    localtime_r(&time_now, &timeinfo);
+
+    initialise_wifi(wf_event_group);
+    uxBits = xEventGroupWaitBits(
+        wf_event_group, 
+        CONNECTED_BIT | WIFI_NOT_SET_BIT, 
+        false, false, 
+        WIFI_CONNECT_TIMEOUT / portTICK_PERIOD_MS
+    );
+
+    if( ( uxBits & CONNECTED_BIT ) != 0 )
+    {
+        // Is time set? If not, tm_year will be (1970 - 1900).
+        if (timeinfo.tm_year < (2016 - 1900)) {
+            ESP_LOGI(TAG, "Time is not set yet. Getting time over NTP.");
+            obtain_time();  // TODO do something if failed
+        }
+
+        // update sleep enter time
+        struct timeval act_time;
+        gettimeofday(&act_time, NULL);
+        sleep_enter_time.tv_sec = act_time.tv_sec - sleep_time_ms / 1000;
+
+        for (int i = 0; i < sizeof(sensors)/sizeof(sensor_settings_t); i++) {
+            sync_over_http(sensors[i]);
+        }
+    }
+    else if( ( uxBits & WIFI_NOT_SET_BIT ) != 0 ) 
+    {
+        ESP_LOGE(TAG, "WiFi not set, try to use ESPTOUCH via button.");
+    }
+    else
+    {
+        ESP_LOGE(TAG, "WiFi timeout - unable to connect within %d secs", WIFI_CONNECT_TIMEOUT / 1000);
+    }
+    stop_wifi();
+}
 
 
 static void sync_over_http(sensor_settings_t sensor)
@@ -304,7 +320,6 @@ void blink_task(void *pvParameter)
      while(1) {
         /* Blink off (output low) */
         gpio_set_level(BLINK_GPIO, 0);
-     int blink_duration = 700;
         vTaskDelay(blink_duration / portTICK_PERIOD_MS);
         /* Blink on (output high) */
         gpio_set_level(BLINK_GPIO, 1);
