@@ -45,7 +45,7 @@
    TODO: make configurable by the user
 */ 
 #define DEEP_SLEEP_DELAY 20       // delay between reboots, in ms
-#define FREQ_SYNC 100             // sync data to the server every X reboots
+#define FREQ_SYNC 1             // sync data to the server every X reboots
 #define BLINK_GPIO 13
 #define EXT_WAKEUP_GPIO 25        // GPIO 25 / A0
 #define DEVICE_ID "2e52e67d-d0f5-4f87-b7b6-9aae97a42623"
@@ -67,6 +67,7 @@ RTC_DATA_ATTR static struct timeval sleep_enter_time;
 static void get_readouts_as_json(const char *sensor_type, char *json_string);
 static void sync_over_http(sensor_settings_t sensor);
 static void blink_task(void *pvParameter);
+static void blink_success();
 
 
 EventBits_t uxBits;
@@ -121,6 +122,11 @@ void app_main()
             if( ( uxBits & ESPTOUCH_DONE_BIT ) == 0 )
             {
                 ESP_LOGE(TAG, "ESPTOUCH failed due to timeout, check settings and try again.");
+            }
+
+            if( ( uxBits & ESPTOUCH_DONE_BIT ) != 0 )
+            {
+                blink_success();
             }
 
             if( xBlinkHandle != NULL )
@@ -215,6 +221,10 @@ void app_main()
 }
 
 
+
+
+
+
 static void sync_over_http(sensor_settings_t sensor)
 {
     int readout_cnt = get_readouts_count(sensor.code);
@@ -289,15 +299,30 @@ void blink_task(void *pvParameter)
 {
     /* Blink the available red LED
      */
-    gpio_pad_select_gpio(BLINK_GPIO);
-    /* Set the GPIO as a push/pull output */
-    gpio_set_direction(BLINK_GPIO, GPIO_MODE_OUTPUT);
-    while(1) {
+     int blink_duration = 700;
+
+     while(1) {
         /* Blink off (output low) */
         gpio_set_level(BLINK_GPIO, 0);
-        vTaskDelay(700 / portTICK_PERIOD_MS);
+     int blink_duration = 700;
+        vTaskDelay(blink_duration / portTICK_PERIOD_MS);
         /* Blink on (output high) */
         gpio_set_level(BLINK_GPIO, 1);
-        vTaskDelay(700 / portTICK_PERIOD_MS);
+        vTaskDelay(blink_duration / portTICK_PERIOD_MS);
+    }
+}
+
+
+static void blink_success()
+{
+    int blink_duration = 300;
+
+    for (int i = 0; i < 3; i++)  {
+        /* Blink off (output low) */
+        gpio_set_level(BLINK_GPIO, 0);
+        vTaskDelay(blink_duration / portTICK_PERIOD_MS);
+        /* Blink on (output high) */
+        gpio_set_level(BLINK_GPIO, 1);
+        vTaskDelay(blink_duration / portTICK_PERIOD_MS);
     }
 }
