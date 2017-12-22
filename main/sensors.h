@@ -11,8 +11,4 @@ typedef struct {
 
 extern sensor_settings_t sensors[5];
 
-int read_temperature_value();
-int read_fertility_value();
-int read_light_value();
-
 void sensor_settings_init();

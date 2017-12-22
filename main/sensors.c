@@ -12,6 +12,7 @@
 #define V_REF 1100
 
 #define ADC1_TEMP_CHANNEL 14                // GPIO 14
+#define ADC1_BAT_CHANNEL 35                 // GPIO 35, A13
 #define ADC1_FERT_CHANNEL (ADC1_CHANNEL_6)  // GPIO 34, A2 Feather
 #define ADC1_LIGHT_CHANNEL (ADC1_CHANNEL_0) // GPIO 36, A4 Feather
 
@@ -41,6 +42,7 @@
 #define FREQ_FERTILITY 1        // read out resistive soil every X reboots
 #define FREQ_SOIL 1             // read out capacitive soil every X reboots
 #define FREQ_PROBE_TEMP 1       // read out probe temperature every X reboots
+#define FREQ_BATTERY 1          // read out battery voltage every X reboots
 
 // logging tag
 static const char *TAG = "sensors";
@@ -50,7 +52,7 @@ static int read_i2c_value(uint8_t cmd_data);
 sensor_settings_t sensors[5];
 
 
-int read_temperature_value()
+static int read_temperature_value()
 {
     ESP_LOGI(TAG, "Reading temperature sensor");
     ds18b20_init(ADC1_TEMP_CHANNEL);
@@ -61,21 +63,21 @@ int read_temperature_value()
 }
 
 
-int read_fertility_value()
+static int read_fertility_value()
 {
     ESP_LOGI(TAG, "Reading fertility sensor");
     return read_adc1_value(ADC1_FERT_CHANNEL);
 }
 
 
-int read_light_value()
+static int read_light_value()
 {
     ESP_LOGI(TAG, "Reading light sensor");
     return read_adc1_value(ADC1_LIGHT_CHANNEL);
 }
 
 
-int read_probe_temp_value()
+static int read_probe_temp_value()
 {
     ESP_LOGI(TAG, "Reading temp from the probe sensor");
 
@@ -84,12 +86,23 @@ int read_probe_temp_value()
 }
 
 
-int read_soil_value()
+static int read_soil_value()
 {
     ESP_LOGI(TAG, "Reading soil sensor");
 
     uint8_t cmd_data = SOIL_CMD_START;
     return read_i2c_value(cmd_data);
+}
+
+
+static int read_battery_voltage_value()
+{
+    ESP_LOGI(TAG, "Reading battery voltage");
+    esp_adc_cal_characteristics_t characteristics_gt;
+    adc1_config_channel_atten(ADC1_BAT_CHANNEL, ADC_ATTEN_11db);  
+    esp_adc_cal_get_characteristics(V_REF, ADC_ATTEN_11db, ADC_WIDTH_BIT_12, &characteristics_gt);
+
+    return adc1_to_voltage(ADC1_BAT_CHANNEL, &characteristics_gt);
 }
 
 
@@ -196,10 +209,18 @@ void sensor_settings_init()
         .read_frequency = FREQ_PROBE_TEMP,
         .read = read_probe_temp_value
     };
+    
+    sensor_settings_t battery_voltage_sensor = {
+        .code = "BAT",
+        .filepath = "/spiffs/battery.txt",
+        .read_frequency = FREQ_BATTERY,
+        .read = read_battery_voltage_value
+    };
 
     sensors[0] = temp_sensor;
     sensors[1] = fert_sensor;
     sensors[2] = light_sensor;
-    sensors[3] = probe_temp_sensor;
-    sensors[4] = soil_sensor;
+    sensors[3] = soil_sensor;
+    sensors[4] = probe_temp_sensor;
+    //sensors[5] = battery_voltage_sensor;
 }
