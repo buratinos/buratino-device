@@ -93,13 +93,18 @@ void get_readouts(const char *sensor_type, unsigned long *times, int *values)
     char line[64];
     int line_idx = 0;
 
-    while (fgets(line, 64, f)) {    
+    while (fgets(line, 64, f)) {
         char *t_from_reboot = strtok (line, " ");  // in ms
         char *readout_value = strtok (NULL, " ");
         readout_value[strlen(readout_value) - 1] = 0;  // remove \n
 
-        times[line_idx] = *t_from_reboot;
-        values[line_idx] = (int)*readout_value;
+        int t1 = atoi(t_from_reboot);
+        unsigned long t2 = t1;
+
+        times[line_idx] = t2;
+        values[line_idx] = atoi(readout_value);
+
+        line_idx++;
     }
     fclose(f);
 }

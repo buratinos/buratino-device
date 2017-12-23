@@ -30,6 +30,7 @@
    to the AP with an IP? */
 const int CONNECTED_BIT = BIT0;
 const int ESPTOUCH_DONE_BIT = BIT1;
+const int TIME_SET_BIT = BIT3;
 const int ESP_TOUCH_CONFIG_BIT = BIT4;
 const int WIFI_NOT_SET_BIT = BIT5;
 
@@ -72,13 +73,16 @@ void obtain_time()
     time(&time_now);
 
     // Set timezone to Eastern Standard Time and print local time
-    setenv("TZ", "EST5EDT, M3.2.0/2, M11.1.0", 1);  // TODO get proper TZ
+    //setenv("TZ", "EST5EDT, M3.2.0/2, M11.1.0", 1);  // TODO get proper TZ
+    setenv("TZ", "RU", 1);  // TODO get proper TZ
     tzset();
     localtime_r(&time_now, &timeinfo);
 
     char strftime_buf[64];
     strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
-    ESP_LOGI(TAG, "The current date/time in New York is: %s", strftime_buf);
+    ESP_LOGI(TAG, "The current date/time in Moscow is: %s", strftime_buf);
+
+    xEventGroupSetBits(wifi_event_group, TIME_SET_BIT);
 }
 
 

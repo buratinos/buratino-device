@@ -44,13 +44,14 @@
 /* Sheduling configuration
    TODO: make configurable by the user
 */ 
-#define DEEP_SLEEP_DELAY 20       // delay between reboots, in ms
-#define FREQ_SYNC 1             // sync data to the server every X reboots
+#define DEEP_SLEEP_DELAY 10       // delay between reboots, in ms
+#define FREQ_SYNC 2             // sync data to the server every X reboots
 #define BLINK_GPIO 13
-#define EXT_WAKEUP_GPIO 25        // GPIO 25 / A0
+#define EXT_WAKEUP_GPIO 25        // GPIO 25 / A1
 #define DEVICE_ID "2e52e67d-d0f5-4f87-b7b6-9aae97a42623"
 #define WIFI_CONNECT_TIMEOUT 30000  // in ms
 #define ESPTOUCH_CONNECT_TIMEOUT 60000  // in ms
+#define HTTP_REQUEST_TIMEOUT 20000  // in ms
 
 
 // logging tag
@@ -89,10 +90,10 @@ void app_main()
     gpio_set_level(BLINK_GPIO, 1);
 
     // enable output voltage for sensors
-    dac_output_enable(DAC_CHANNEL_2);
+    dac_output_enable(DAC_CHANNEL_2);  // GPIO 26 / A0
     dac_output_voltage(DAC_CHANNEL_2, 255);
 
-    // compute time spent in deep sleep
+    // compute time spent in deep sleep 
     struct timeval now;
     gettimeofday(&now, NULL);
     sleep_time_ms = (now.tv_sec - sleep_enter_time.tv_sec) * 1000 + (now.tv_usec - sleep_enter_time.tv_usec) / 1000;
@@ -135,6 +136,12 @@ void app_main()
             if (boot_count % FREQ_SYNC == 0) {
                 sync_data_routine();
             }
+    }
+
+    // disconnect WiFi
+    if( ( uxBits & CONNECTED_BIT ) != 0 )
+    {
+        stop_wifi();
     }
 
     // unmount SPIFFS filesystem
@@ -188,7 +195,6 @@ static void smart_config_routine()
 
 static void read_sensor_routine()
 {
-    // perform sensor readouts TODO get via xQueue?
     for (int i = 0; i < sizeof(sensors)/sizeof(sensor_settings_t); i++) {
         if (boot_count % sensors[i].read_frequency == 0) {
             dump_readout(sensors[i].code, sleep_time_ms, sensors[i].read());    
@@ -218,6 +224,12 @@ static void sync_data_routine()
         if (timeinfo.tm_year < (2016 - 1900)) {
             ESP_LOGI(TAG, "Time is not set yet. Getting time over NTP.");
             obtain_time();  // TODO do something if failed
+
+            uxBits = xEventGroupWaitBits(wf_event_group, TIME_SET_BIT, false, false, HTTP_REQUEST_TIMEOUT / portTICK_PERIOD_MS);
+            if( ( uxBits & TIME_SET_BIT ) == 0 ) {
+                ESP_LOGE(TAG, "Time set request timeout.");                
+                return;  // can't sync readout data with non-absolute timestamps
+            }
         }
 
         // update sleep enter time
@@ -263,8 +275,8 @@ static void sync_over_http(sensor_settings_t sensor)
     //int status = http_POST(request);
 
     //if (status == 201) {
-    //    ESP_LOGI(TAG, "Sync successful, cleaning stored readouts for %s", sensors[i].code);
-    //    flush_readouts(sensors[i].code);
+    //    ESP_LOGI(TAG, "Sync successful, cleaning stored readouts for %s", sensor.code);
+    //    flush_readouts(sensor.code);
     //}
 
     free(json_string);
@@ -286,7 +298,7 @@ static void get_readouts_as_json(const char *sensor_type, char *json_string)
     strcpy(json_string,  "[");
 
     for (int j=0; j < readout_cnt; j++) {
-        char readout[128];
+        char readout[256];
         
         time_t readout_time = sleep_enter_time.tv_sec + times[j] / 1000;
         localtime_r(&readout_time, &timeinfo);
@@ -296,7 +308,7 @@ static void get_readouts_as_json(const char *sensor_type, char *json_string)
             strcat(json_string, ", ");
         }
 
-        snprintf(readout, 128, 
+        snprintf(readout, 256, 
             "{\"device\": \"%s\", \"timestamp\": \"%s\", \"sensor_type\": \"%s\", \"value\": %d}", 
             DEVICE_ID, curr_time_buf, sensor_type, values[j]
         );
