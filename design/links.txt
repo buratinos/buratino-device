@@ -1,2 +1,8 @@
 How to create 3D Text in Blender
 https://www.youtube.com/watch?v=cS3aRmcohn8
+
+Boolean problems
+https://blender.stackexchange.com/questions/15963/failing-to-chisel-boolean-difference-text-on-a-cube-side
+
+Image SVG - 2D To 3D In Blender
+https://www.youtube.com/watch?v=g6cmClwLhz8
